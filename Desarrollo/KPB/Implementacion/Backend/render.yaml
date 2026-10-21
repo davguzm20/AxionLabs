@@ -2,7 +2,7 @@ services:
   - type: web
     name: kpb-backend
     runtime: python
-    rootDir: Desarrollo/KhipuBot/Implementacion/Backend
+    rootDir: Desarrollo/KPB/Implementacion/Backend
     plan: free
     buildCommand: uv sync --frozen --no-dev
     startCommand: uv run --no-dev uvicorn app.main:app --host 0.0.0.0 --port $PORT
