@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     FetchedValue,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -231,6 +236,15 @@ class User(Base):
     categories: Mapped[list[Category]] = relationship(
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
+    transactions: Mapped[list[Transaction]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
+    budgets: Mapped[list[Budget]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
+    alerts: Mapped[list[Alert]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
     access_logs: Mapped[list[AccessLog]] = relationship(
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -292,6 +306,8 @@ class Category(Base):
     created_at: Mapped[datetime] = _created_at()
 
     user: Mapped[User | None] = relationship(back_populates="categories")
+    transactions: Mapped[list[Transaction]] = relationship(back_populates="category")
+    budgets: Mapped[list[Budget]] = relationship(back_populates="category")
 
     @property
     def is_system(self) -> bool:
@@ -349,6 +365,11 @@ class Wallet(Base):
     updated_at: Mapped[datetime] = _updated_at()
 
     user: Mapped[User] = relationship(back_populates="wallets")
+    transactions: Mapped[list[Transaction]] = relationship(
+        back_populates="wallet",
+        primaryjoin="Wallet.wallet_id == Transaction.wallet_id",
+        foreign_keys="Transaction.wallet_id",
+    )
 
     @validates("name")
     def _validate_name(self, key: str, value: str) -> str:
@@ -404,6 +425,386 @@ class Wallet(Base):
 
 
 # ---------------------------------------------------------------------------
+# transactions
+# ---------------------------------------------------------------------------
+class Transaction(Base):
+    __tablename__ = "transactions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["wallet_id", "user_id"],
+            ["wallets.wallet_id", "wallets.user_id"],
+            name="fk_transactions_wallet_user",
+        ),
+        CheckConstraint("amount > 0", name="chk_transactions_amount"),
+        Index("idx_transactions_user_date", "user_id", text("transacted_at DESC")),
+        Index("idx_transactions_wallet_id", "wallet_id"),
+        Index("idx_transactions_category", "category_id", "transacted_at"),
+    )
+
+    transaction_id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    wallet_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("categories.category_id"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    type: Mapped[TransactionType] = mapped_column(
+        _pg_enum(TransactionType, "transaction_type_enum"), nullable=False
+    )
+    currency: Mapped[Currency] = mapped_column(
+        _pg_enum(Currency, "currency_enum"),
+        nullable=False,
+        default=Currency.PEN,
+    )
+    concept: Mapped[str | None] = mapped_column(String(255))
+    transacted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=now_lima
+    )
+    status: Mapped[TransactionStatus] = mapped_column(
+        _pg_enum(TransactionStatus, "transaction_status_enum"),
+        nullable=False,
+        default=TransactionStatus.PENDIENTE,
+        server_default=text("'PENDIENTE'"),
+    )
+    source_input: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[SourceType] = mapped_column(
+        _pg_enum(SourceType, "source_type_enum"), nullable=False
+    )
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _updated_at()
+
+    user: Mapped[User] = relationship(back_populates="transactions")
+    wallet: Mapped[Wallet] = relationship(
+        back_populates="transactions",
+        primaryjoin="Wallet.wallet_id == Transaction.wallet_id",
+        foreign_keys="Transaction.wallet_id",
+    )
+    category: Mapped[Category] = relationship(back_populates="transactions")
+
+    @validates("amount")
+    def _validate_amount(
+        self, key: str, value: Decimal | str | float | int
+    ) -> Decimal:
+        dec_val = quantize_money(value)
+        if dec_val <= Decimal("0.00"):
+            raise ValueError("AMOUNT_INVALID: El monto debe ser mayor a 0.")
+        return dec_val
+
+    @property
+    def occurred_at(self) -> datetime:
+        return self.transacted_at
+
+    @occurred_at.setter
+    def occurred_at(self, value: datetime) -> None:
+        self.transacted_at = value
+
+    def confirm(self) -> None:
+        """Marca la transacción como CONFIRMADA tras la revisión del usuario."""
+        self.status = TransactionStatus.CONFIRMADA
+
+    def reclassify(
+        self, new_category_id: uuid.UUID, new_concept: str | None = None
+    ) -> None:
+        """Actualiza manualmente la categoría asignada y opcionalmente el concepto."""
+        self.category_id = new_category_id
+        if new_concept is not None:
+            self.concept = new_concept.strip()
+
+    def to_api_dict(
+        self, category_source: str = "suggested", issuer: str | None = None
+    ) -> dict[str, Any]:
+        return {
+            "id": str(self.transaction_id),
+            "type": self.type.api_value,
+            "amount": f"{quantize_money(self.amount):.2f}",
+            "currency": self.currency.value,
+            "concept": self.concept,
+            "category": {
+                "id": str(self.category_id),
+                "name": self.category.name if self.category else None,
+                "source": category_source,
+            },
+            "wallet": {
+                "id": str(self.wallet_id),
+                "name": self.wallet.name if self.wallet else None,
+            },
+            "issuer": issuer,
+            "occurred_at": (
+                self.transacted_at.isoformat() if self.transacted_at else None
+            ),
+            "source": self.source_type.api_value,
+            "status": self.status.api_value,
+        }
+
+    def __repr__(self) -> str:
+        return f"<Transaction {self.type.value if self.type else ''} {self.amount}>"
+
+
+# ---------------------------------------------------------------------------
+# budgets
+# ---------------------------------------------------------------------------
+class Budget(Base):
+    __tablename__ = "budgets"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="chk_budgets_amount"),
+        CheckConstraint(
+            "threshold_percentage > 0 AND threshold_percentage <= 100",
+            name="chk_budgets_threshold",
+        ),
+        CheckConstraint(
+            "(period_type = 'SEMANAL' AND period_days = 7) OR "
+            "(period_type = 'MENSUAL' AND period_days = 30) OR "
+            "(period_type = 'PERSONALIZADO' AND period_days > 0)",
+            name="chk_budgets_period",
+        ),
+        Index(
+            "uq_budgets_active_category",
+            "user_id",
+            "category_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVO'"),
+        ),
+        Index("idx_budgets_category_id", "category_id"),
+    )
+
+    budget_id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("categories.category_id"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    currency: Mapped[Currency] = mapped_column(
+        _pg_enum(Currency, "currency_enum"),
+        nullable=False,
+        default=Currency.PEN,
+    )
+    threshold_percentage: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2),
+        nullable=False,
+        default=Decimal("80.00"),
+        server_default=text("80"),
+    )
+    period_type: Mapped[PeriodType] = mapped_column(
+        _pg_enum(PeriodType, "period_type_enum"),
+        nullable=False,
+        default=PeriodType.MENSUAL,
+    )
+    period_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    start_date: Mapped[date] = mapped_column(
+        Date, nullable=False, default=lambda: now_lima().date()
+    )
+    status: Mapped[BudgetStatus] = mapped_column(
+        _pg_enum(BudgetStatus, "budget_status_enum"),
+        nullable=False,
+        default=BudgetStatus.ACTIVO,
+        server_default=text("'ACTIVO'"),
+    )
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _updated_at()
+
+    user: Mapped[User] = relationship(back_populates="budgets")
+    category: Mapped[Category] = relationship(back_populates="budgets")
+    alerts: Mapped[list[Alert]] = relationship(
+        back_populates="budget", passive_deletes=True
+    )
+
+    @validates("amount")
+    def _validate_amount(
+        self, key: str, value: Decimal | str | float | int
+    ) -> Decimal:
+        dec_val = quantize_money(value)
+        if dec_val <= Decimal("0.00"):
+            raise ValueError("AMOUNT_INVALID: El límite presupuestal debe ser mayor a 0.")
+        return dec_val
+
+    @validates("threshold_percentage")
+    def _validate_threshold(
+        self, key: str, value: Decimal | str | float | int
+    ) -> Decimal:
+        dec_val = quantize_percentage(value)
+        if dec_val <= Decimal("0.00") or dec_val > Decimal("100.00"):
+            raise ValueError(
+                "PERCENTAGE_INVALID: Ingrese un porcentaje entre 1% y 100%."
+            )
+        return dec_val
+
+    @property
+    def monthly_limit(self) -> Decimal:
+        return quantize_money(self.amount)
+
+    @monthly_limit.setter
+    def monthly_limit(self, value: Decimal | str | float | int) -> None:
+        self.amount = quantize_money(value)
+
+    def evaluate_impact(
+        self, spent_amount: Decimal | str | float | int
+    ) -> dict[str, Any]:
+        """Calcula el consumo acumulado, el saldo restante y el estado frente al tope."""
+        limit = quantize_money(self.amount)
+        spent = quantize_money(spent_amount)
+        remaining = quantize_money(max(Decimal("0.00"), limit - spent))
+        exact_pct = quantize_percentage((spent / limit) * Decimal("100.00"))
+        threshold = quantize_percentage(self.threshold_percentage)
+
+        if exact_pct > Decimal("100.00"):
+            impact_status = "exceeded"
+        elif exact_pct >= threshold:
+            impact_status = "warning"
+        else:
+            impact_status = "ok"
+
+        return {
+            "monthly_limit": f"{limit:.2f}",
+            "spent_month": f"{spent:.2f}",
+            "remaining": f"{remaining:.2f}",
+            "usage_percentage": float(
+                exact_pct.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            ),
+            "exact_percentage": exact_pct,
+            "status": impact_status,
+        }
+
+    def build_alert_if_exceeded(
+        self,
+        spent_amount: Decimal | str | float | int,
+        category_name: str = "la categoría",
+    ) -> Alert | None:
+        """Construye un objeto Alert si el gasto acumulado alcanza o supera el umbral."""
+        if self.status != BudgetStatus.ACTIVO:
+            return None
+
+        impact = self.evaluate_impact(spent_amount)
+        exact_pct: Decimal = impact["exact_percentage"]
+        remaining_dec = quantize_money(impact["remaining"])
+        threshold = quantize_percentage(self.threshold_percentage)
+
+        if exact_pct < threshold:
+            return None
+
+        if exact_pct > Decimal("100.00"):
+            alert_type = AlertType.SOBREGIRO
+            message = (
+                f"Superaste tu tope en {category_name} ({float(exact_pct):.1f}%). "
+                "Te sugerimos revisar tus movimientos recientes o replantear tu presupuesto."
+            )
+        else:
+            alert_type = AlertType.UMBRAL
+            message = (
+                f"Llegaste al {int(threshold)}% de tu tope en {category_name}. "
+                f"Te quedan S/ {remaining_dec:.2f}."
+            )
+
+        return Alert(
+            user_id=self.user_id,
+            budget_id=self.budget_id,
+            alert_type=alert_type,
+            message=message,
+            detected_percentage=exact_pct,
+            remaining_balance=remaining_dec,
+            is_read=False,
+            triggered_at=now_lima(),
+        )
+
+    def __repr__(self) -> str:
+        return f"<Budget {self.amount} {self.period_type.value if self.period_type else ''}>"
+
+
+# ---------------------------------------------------------------------------
+# alerts
+# ---------------------------------------------------------------------------
+class Alert(Base):
+    __tablename__ = "alerts"
+    __table_args__ = (
+        CheckConstraint("detected_percentage >= 0", name="chk_alerts_detected"),
+        Index("idx_alerts_user_unread", "user_id", "is_read"),
+        Index("idx_alerts_budget_id", "budget_id"),
+    )
+
+    alert_id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    budget_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("budgets.budget_id", ondelete="SET NULL")
+    )
+    alert_type: Mapped[AlertType] = mapped_column(
+        _pg_enum(AlertType, "alert_type_enum"), nullable=False
+    )
+    message: Mapped[str] = mapped_column(String(255), nullable=False)
+    detected_percentage: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    remaining_balance: Mapped[Decimal | None] = mapped_column(Money)
+    is_read: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("FALSE")
+    )
+    triggered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=now_lima
+    )
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _updated_at()
+
+    user: Mapped[User] = relationship(back_populates="alerts")
+    budget: Mapped[Budget | None] = relationship(back_populates="alerts")
+
+    @property
+    def type(self) -> AlertType:
+        return self.alert_type
+
+    @type.setter
+    def type(self, value: AlertType) -> None:
+        self.alert_type = value
+
+    @property
+    def priority(self) -> str:
+        return "high" if self.alert_type == AlertType.SOBREGIRO else "normal"
+
+    def mark_as_read(self) -> None:
+        self.is_read = True
+
+    def to_api_dict(self) -> dict[str, Any]:
+        category_dict = None
+        if self.budget and self.budget.category:
+            category_dict = {
+                "id": str(self.budget.category.category_id),
+                "name": self.budget.category.name,
+            }
+        return {
+            "id": str(self.alert_id),
+            "type": "budget_alert",
+            "alert_type": self.alert_type.value,
+            "priority": self.priority,
+            "category": category_dict,
+            "usage_percentage": (
+                float(self.detected_percentage)
+                if self.detected_percentage is not None
+                else None
+            ),
+            "remaining": (
+                f"{quantize_money(self.remaining_balance):.2f}"
+                if self.remaining_balance is not None
+                else None
+            ),
+            "message": self.message,
+            "read": self.is_read,
+            "created_at": (
+                self.triggered_at.isoformat() if self.triggered_at else None
+            ),
+        }
+
+    def __repr__(self) -> str:
+        return f"<Alert {self.alert_type.value if self.alert_type else ''} {self.detected_percentage}%>"
+
+
+# ---------------------------------------------------------------------------
 # access_logs
 # ---------------------------------------------------------------------------
 class AccessLog(Base):
@@ -451,5 +852,8 @@ __all__ = [
     "User",
     "Category",
     "Wallet",
+    "Transaction",
+    "Budget",
+    "Alert",
     "AccessLog",
 ]
