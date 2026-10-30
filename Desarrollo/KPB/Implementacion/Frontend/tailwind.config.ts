@@ -11,8 +11,8 @@ export default {
         bg: '#F5F7FA',
         surface: '#FFFFFF',
         success: '#16A34A',
-        danger: '#DC2626',
-        warning: '#F59E0B',
+        danger: { DEFAULT: '#DC2626', 500: '#EF4444', 600: '#DC2626' },
+        warning: { DEFAULT: '#F59E0B', 500: '#F59E0B', 600: '#D97706' },
       },
       fontFamily: {
         display: ['Poppins', 'system-ui', 'sans-serif'],

@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
+import { History, Home, Settings, Wallet } from 'lucide-react';
 
 const items = [
-  { label: 'Inicio', path: '/inicio', icon: '⌂' },
-  { label: 'Historial', path: '/historial', icon: '↶' },
-  { label: 'Monederos', path: '/monederos', icon: '▣' },
-  { label: 'Ajustes', path: '/ajustes', icon: '⚙' },
+  { label: 'Inicio', path: '/inicio', icon: Home },
+  { label: 'Historial', path: '/historial', icon: History },
+  { label: 'Monederos', path: '/monederos', icon: Wallet },
+  { label: 'Ajustes', path: '/ajustes', icon: Settings },
 ];
 
 export function BottomNav() {
@@ -16,10 +17,10 @@ export function BottomNav() {
             <NavLink
               to={item.path}
               aria-label={item.label}
-              className={({ isActive }) => `flex h-full min-h-11 flex-col items-center justify-center gap-1 text-xs ${isActive ? 'font-semibold text-accent-500' : 'text-ink-500'}`}
+                className={({ isActive }) => `flex h-full min-h-11 flex-col items-center justify-center gap-1 text-xs ${isActive ? 'font-semibold text-brand-500' : 'text-ink-500'}`}
             >
-              <span aria-hidden="true" className="text-xl leading-5">{item.icon}</span>
-              <span>{item.label}</span>
+                <item.icon aria-hidden="true" size={24} />
+                <span>{item.label}</span>
             </NavLink>
           </li>
         ))}
