@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
+import { History, Home, Settings, Wallet } from 'lucide-react';
 
 const items = [
-  { label: 'Inicio', path: '/inicio', icon: '⌂' },
-  { label: 'Historial', path: '/historial', icon: '↶' },
-  { label: 'Monederos', path: '/monederos', icon: '▣' },
-  { label: 'Ajustes', path: '/ajustes', icon: '⚙' },
+  { label: 'Inicio', path: '/inicio', icon: Home },
+  { label: 'Historial', path: '/historial', icon: History },
+  { label: 'Monederos', path: '/monederos', icon: Wallet },
+  { label: 'Ajustes', path: '/ajustes', icon: Settings },
 ];
 
 export function Sidebar() {
@@ -19,7 +20,7 @@ export function Sidebar() {
                 to={item.path}
                 className={({ isActive }) => `flex min-h-11 items-center gap-3 rounded-md px-3 text-body ${isActive ? 'bg-brand-100 font-semibold text-brand-700' : 'text-ink-700 hover:bg-bg'}`}
               >
-                <span aria-hidden="true" className="w-6 text-center">{item.icon}</span>
+                <item.icon aria-hidden="true" size={24} className="shrink-0" />
                 {item.label}
               </NavLink>
             </li>
