@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChatBubble } from './components/ChatBubble';
 import type { BotMood } from './components/ChatBubble';
@@ -79,9 +79,6 @@ export function ChatPage() {
           <h1 id="chat-title" className="font-semibold text-ink-900">KhipuBot</h1>
           <p className="text-xs text-brand-700"><span aria-hidden="true">●</span> En línea</p>
         </div>
-        <button type="button" aria-label="Notificaciones" className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-ink-700 hover:bg-gray-100">
-          <Bell aria-hidden="true" size={20} />
-        </button>
       </header>
 
       <div ref={logRef} role="log" aria-live="polite" aria-label="Conversación con KhipuBot" className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-white p-4">
