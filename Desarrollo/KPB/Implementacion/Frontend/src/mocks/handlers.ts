@@ -2,6 +2,23 @@ import { http, HttpResponse } from 'msw';
 
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
+  http.get('*/categories', () => HttpResponse.json({
+    data: [
+      { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils', status: 'ACTIVE' },
+      { id: 'c815c08e-0300-4c4a-a4f0-9d6747347f09', name: 'Transporte', type: 'EXPENSE', icon: 'car', status: 'ACTIVE' },
+      { id: 'd7a27763-e456-483f-8853-1506421e21db', name: 'Otros', type: 'EXPENSE', icon: 'shapes', status: 'ACTIVE' },
+      { id: 'fb9babf0-b268-4bde-9dc5-7f8953012bc6', name: 'Ingresos', type: 'INCOME', icon: 'briefcase', status: 'ACTIVE' },
+    ],
+  })),
+  http.get('*/wallets', () => HttpResponse.json({
+    data: [{
+      id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
+      name: 'BCP',
+      currency: 'PEN',
+      is_default: true,
+      status: 'ACTIVE',
+    }],
+  })),
   http.post('*/transactions/text', async ({ request }) => {
     const body = await request.json() as { text?: string };
     const text = body.text ?? '';
@@ -48,6 +65,64 @@ export const handlers = [
         ? 'Excediste el tope de Alimentación.'
         : `Registré S/ ${amount} en ${isMenu ? 'Alimentación' : 'Otros'}. Si algo no está bien, puedes corregirlo.`,
       wallet_name: 'BCP',
+    }, { status: 201 });
+  }),
+  http.post('*/transactions/voice', async ({ request }) => {
+    const body = await request.formData();
+    const audio = body.get('audio');
+    if (!(audio instanceof File)) {
+      return HttpResponse.json({ error: { code: 'AUDIO_UNINTELLIGIBLE', message: 'No pude entender el audio. ¿Puedes repetirlo o escribirlo?' } }, { status: 422 });
+    }
+    if (audio.name.toLowerCase().includes('falla')) {
+      return HttpResponse.json({ error: { code: 'STT_UNAVAILABLE', message: 'El servicio de voz no está disponible. Intenta más tarde.' } }, { status: 503 });
+    }
+    return HttpResponse.json({
+      preview_id: 'voice-preview-20261030-001',
+      transcript: 'Gasté quince soles en el menú',
+      extracted: {
+        type: 'EXPENSE',
+        amount: '15.00',
+        currency: 'PEN',
+        concept: 'Menú',
+        merchant: null,
+        ruc: null,
+        transaction_date: '2026-10-30',
+        wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
+        category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },
+      },
+      confidence: 0.92,
+      requires_confirmation: true,
+    }, { status: 200 });
+  }),
+  http.post('*/transactions/voice/confirm', async ({ request }) => {
+    const body = await request.json() as {
+      type: 'EXPENSE' | 'INCOME';
+      amount: string;
+      currency: string;
+      concept: string;
+      transaction_date: string;
+      category_id: string;
+      wallet_id: string;
+    };
+    const categoryName = body.category_id === 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'
+      ? 'Alimentación'
+      : body.category_id === 'c815c08e-0300-4c4a-a4f0-9d6747347f09'
+        ? 'Transporte'
+        : body.type === 'INCOME' ? 'Ingresos' : 'Otros';
+    return HttpResponse.json({
+      transaction: {
+        id: 'voice-transaction-20261030-001',
+        type: body.type,
+        amount: body.amount,
+        currency: body.currency,
+        concept: body.concept,
+        transaction_date: body.transaction_date,
+        wallet_id: body.wallet_id,
+        category: { id: body.category_id, name: categoryName, icon: 'circle-help', type: body.type },
+      },
+      wallet_name: 'BCP',
+      wallet_balance: '170.00',
+      alerts: [],
     }, { status: 201 });
   }),
   http.post('*/auth/login', async ({ request }) => {

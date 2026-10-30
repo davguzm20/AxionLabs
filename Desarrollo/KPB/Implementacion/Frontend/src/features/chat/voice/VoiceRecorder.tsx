@@ -81,8 +81,9 @@ export function VoiceRecorder({ onClose, onSubmit }: VoiceRecorderProps) {
 
   useEffect(() => () => {
     cancelledRef.current = true;
-    stopRecording();
-    stopTracks();
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    if (timerRef.current !== null) window.clearInterval(timerRef.current);
   }, []);
 
   async function startRecording() {
@@ -134,6 +135,7 @@ export function VoiceRecorder({ onClose, onSubmit }: VoiceRecorderProps) {
         if (seconds >= MAX_AUDIO_SECONDS) stopRecording();
       }, 500);
     } catch {
+      stopTracks();
       setError('No se pudo acceder al micrófono. Revisa el permiso o selecciona un archivo.');
     }
   }
@@ -200,7 +202,10 @@ export function VoiceRecorder({ onClose, onSubmit }: VoiceRecorderProps) {
             accept="audio/webm,audio/ogg,audio/mp4,audio/mpeg,audio/wav"
             className="sr-only"
             aria-label="Seleccionar archivo de audio"
-            onChange={(event) => void selectAudio(event.target.files?.[0])}
+            onChange={(event) => {
+              void selectAudio(event.target.files?.[0]);
+              event.currentTarget.value = '';
+            }}
           />
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={recording || sending} className="inline-flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50">
             <Upload aria-hidden="true" size={17} /> Elegir archivo de audio
