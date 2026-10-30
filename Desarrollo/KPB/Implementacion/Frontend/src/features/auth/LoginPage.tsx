@@ -55,15 +55,14 @@ export function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-bg px-4 py-8">
-      <div className="w-full max-w-[420px]">
-        <header className="mb-6 text-center">
-          <p className="font-display text-h2 text-brand-600">KhipuBot</p>
-          <p className="mt-2 text-small text-ink-500">Tus finanzas, en un chat.</p>
-        </header>
-        <section className="rounded-lg bg-surface p-6 shadow-sm sm:p-8">
-          <h1 className="font-display text-h1">Inicia sesión</h1>
-          <p className="mt-2 text-body text-ink-500">Bienvenido de nuevo</p>
+    <main className="grid min-h-screen place-items-center bg-white px-6 py-10">
+      <div className="mx-auto w-full max-w-md">
+        <section className="w-full max-w-md">
+          <div className="mb-6 flex justify-center">
+            <img src="/logo.png" alt="KhipuBot Logo" className="h-auto w-40 max-w-full sm:w-56" />
+          </div>
+          <h1 className="text-center font-display text-h1">Inicia sesión</h1>
+          <p className="mt-2 text-center text-body text-ink-500">Bienvenido de nuevo</p>
           <form className="mt-6 space-y-5" onSubmit={handleSubmit(onSubmit)} noValidate>
             <div>
               <label htmlFor="email" className="mb-2 block text-small font-medium text-ink-900">Correo electrónico</label>
