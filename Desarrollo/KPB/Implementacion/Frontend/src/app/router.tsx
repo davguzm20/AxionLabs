@@ -1,21 +1,26 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './layout/AppShell';
+import { LoginPage } from '../features/auth/LoginPage';
+import { ProtectedRoute } from '../features/auth/ProtectedRoute';
 import { NotFoundPage } from '../pages/NotFoundPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 
-export const router = createBrowserRouter([
-  {
-    path: '/',
-    element: <Navigate to="/inicio" replace />,
-  },
-  {
-    element: <AppShell />,
-    children: [
-      { path: '/inicio', element: <PlaceholderPage title="Inicio" /> },
-      { path: '/historial', element: <PlaceholderPage title="Historial" /> },
-      { path: '/monederos', element: <PlaceholderPage title="Monederos" /> },
-      { path: '/ajustes', element: <PlaceholderPage title="Ajustes" /> },
-    ],
-  },
-  { path: '*', element: <NotFoundPage /> },
-]);
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<Navigate to="/inicio" replace />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/registro" element={<PlaceholderPage title="Registro" />} />
+      <Route path="/recuperar-password" element={<PlaceholderPage title="Recuperar contraseña" />} />
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppShell />}>
+          <Route path="/inicio" element={<PlaceholderPage title="Inicio" />} />
+          <Route path="/historial" element={<PlaceholderPage title="Historial" />} />
+          <Route path="/monederos" element={<PlaceholderPage title="Monederos" />} />
+          <Route path="/ajustes" element={<PlaceholderPage title="Ajustes" />} />
+        </Route>
+      </Route>
+      <Route path="*" element={<NotFoundPage />} />
+    </Routes>
+  );
+}
