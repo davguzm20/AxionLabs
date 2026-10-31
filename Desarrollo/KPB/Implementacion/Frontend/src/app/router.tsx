@@ -8,6 +8,8 @@ import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { ChatPage } from '../features/chat/ChatPage';
+import { BudgetsPage } from '../features/budgets/pages/BudgetsPage';
+import { SettingsPage } from '../features/settings/pages/SettingsPage';
 
 export function AppRoutes() {
   return (
@@ -21,8 +23,9 @@ export function AppRoutes() {
         <Route element={<AppShell />}>
           <Route path="/inicio" element={<ChatPage />} />
           <Route path="/historial" element={<PlaceholderPage title="Historial" />} />
+          <Route path="/presupuestos" element={<BudgetsPage />} />
           <Route path="/monederos" element={<PlaceholderPage title="Monederos" />} />
-          <Route path="/ajustes" element={<PlaceholderPage title="Ajustes" />} />
+          <Route path="/ajustes" element={<SettingsPage />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFoundPage />} />

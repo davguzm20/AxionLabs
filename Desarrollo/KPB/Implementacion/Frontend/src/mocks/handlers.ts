@@ -1,7 +1,58 @@
 import { http, HttpResponse } from 'msw';
 
+const budgetCategories = [
+  { id: 'cat-food', name: 'Alimentación', currency: 'PEN', type: 'EXPENSE' },
+  { id: 'cat-transport', name: 'Transporte', currency: 'PEN', type: 'EXPENSE' },
+  { id: 'cat-other', name: 'Otros', currency: 'PEN', type: 'EXPENSE' },
+];
+
+type MockBudget = {
+  category_id: string;
+  category_name: string;
+  currency: string;
+  monthly_limit: string | null;
+  spent: string;
+  usage_percentage: number;
+  alert_threshold: number;
+};
+
+const mockBudgets: MockBudget[] = [
+  { category_id: 'cat-food', category_name: 'Alimentación', currency: 'PEN', monthly_limit: '500.00', spent: '410.80', usage_percentage: 82.16, alert_threshold: 80 },
+  { category_id: 'cat-transport', category_name: 'Transporte', currency: 'PEN', monthly_limit: '80.00', spent: '69.80', usage_percentage: 87.25, alert_threshold: 80 },
+  { category_id: 'cat-other', category_name: 'Otros', currency: 'PEN', monthly_limit: null, spent: '0.00', usage_percentage: 0, alert_threshold: 80 },
+];
+
+function decimalToCents(value: string): bigint {
+  const [whole = '0', fraction = ''] = value.split('.');
+  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+}
+
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
+  http.get('*/api/v1/categories', () => HttpResponse.json({ data: budgetCategories })),
+  http.get('*/api/v1/budgets', () => HttpResponse.json({ period: 'Setiembre 2026', data: mockBudgets })),
+  http.put('*/api/v1/budgets/:categoryId', async ({ params, request }) => {
+    const categoryId = String(params.categoryId);
+    const body = await request.json() as { monthly_limit?: string };
+    const budget = mockBudgets.find((item) => item.category_id === categoryId);
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
+    if (!body.monthly_limit) return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un tope válido.' } }, { status: 422 });
+    budget.monthly_limit = body.monthly_limit;
+    const limitCents = decimalToCents(body.monthly_limit);
+    const spentCents = decimalToCents(budget.spent);
+    budget.usage_percentage = Number(spentCents * 10_000n / limitCents) / 100;
+    return HttpResponse.json(budget);
+  }),
+  http.put('*/api/v1/budgets/:categoryId/alert-thresholds', async ({ params, request }) => {
+    const categoryId = String(params.categoryId);
+    const budget = mockBudgets.find((item) => item.category_id === categoryId);
+    const body = await request.json() as { thresholds?: number[] };
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
+    const threshold = body.thresholds?.[0];
+    if (!threshold || threshold < 1 || threshold > 100) return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'El porcentaje debe estar entre 1 y 100.' } }, { status: 422 });
+    budget.alert_threshold = threshold;
+    return HttpResponse.json({ thresholds: [threshold] });
+  }),
   http.post('*/transactions/text', async ({ request }) => {
     const body = await request.json() as { text?: string };
     const text = body.text ?? '';
