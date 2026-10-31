@@ -2,6 +2,27 @@ import { http, HttpResponse } from 'msw';
 
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
+  http.get('*/api/v1/categories', () => HttpResponse.json([
+    { id: 'category-food', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
+    { id: 'category-transport', name: 'Transporte', type: 'EXPENSE', icon: 'bus' },
+    { id: 'category-health', name: 'Salud', type: 'EXPENSE', icon: 'heart-pulse' },
+    { id: 'category-other', name: 'Otros', type: 'EXPENSE', icon: 'circle-help' },
+  ])),
+  http.post('*/api/v1/categories/suggest', async ({ request }) => {
+    const body = await request.json() as { concept?: string; amount?: string };
+    const concept = body.concept?.toLocaleLowerCase('es-PE') ?? '';
+    const isFood = /café|cafe|almuerzo|comida/.test(concept);
+    const category = isFood
+      ? { id: 'category-food', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' }
+      : { id: 'category-other', name: 'Otros', type: 'EXPENSE', icon: 'circle-help' };
+
+    return HttpResponse.json({
+      category,
+      confidence: isFood ? 0.94 : 0.3,
+      reason: isFood ? 'El concepto se relaciona con alimentación.' : 'No se encontró una coincidencia clara.',
+      needs_review: !isFood,
+    });
+  }),
   http.post('*/transactions/text', async ({ request }) => {
     const body = await request.json() as { text?: string };
     const text = body.text ?? '';
