@@ -4,7 +4,7 @@ export type CategoryChoice = {
   id: string;
   name: string;
   icon?: string;
-  type: TransactionType;
+  type?: TransactionType;
   status?: string;
 };
 
