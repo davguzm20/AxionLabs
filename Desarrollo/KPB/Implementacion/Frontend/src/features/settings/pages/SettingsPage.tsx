@@ -7,7 +7,7 @@ export function SettingsPage() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
   return (
-    <main className="h-full w-full overflow-y-auto bg-white px-4 pb-24 sm:px-6">
+    <main className="h-full w-full overflow-y-auto bg-gray-50 px-4 pb-24 sm:px-6">
       <div className="mx-auto w-full max-w-3xl">
         <header className="sticky top-0 z-10 -mx-4 mb-4 flex h-[4.5rem] items-center border-b border-gray-200 bg-white px-4 sm:-mx-6 sm:px-6">
           <h1 className="font-semibold text-ink-900">Ajustes</h1>
