@@ -3,7 +3,7 @@
 Python no puede importar un archivo con guion (KPB-ENT.py), asi que este modulo
 lo carga una sola vez y reexporta sus clases:
 
-    from app.entities import User, Wallet
+    from app.entities import User, Wallet, Transaction, Category
 """
 
 import importlib.util
@@ -24,10 +24,28 @@ else:
 
 AccessLog = _entities.AccessLog
 AccessStatus = _entities.AccessStatus
+Category = _entities.Category
 Currency = _entities.Currency
+SourceType = _entities.SourceType
+Transaction = _entities.Transaction
+TransactionStatus = _entities.TransactionStatus
+TransactionType = _entities.TransactionType
 User = _entities.User
 UserStatus = _entities.UserStatus
 Wallet = _entities.Wallet
 WalletType = _entities.WalletType
 
-__all__ = ["AccessLog", "AccessStatus", "Currency", "User", "UserStatus", "Wallet", "WalletType"]
+__all__ = [
+    "AccessLog",
+    "AccessStatus",
+    "Category",
+    "Currency",
+    "SourceType",
+    "Transaction",
+    "TransactionStatus",
+    "TransactionType",
+    "User",
+    "UserStatus",
+    "Wallet",
+    "WalletType",
+]
