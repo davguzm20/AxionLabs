@@ -1,5 +1,6 @@
 
 import {
+  BellRing,
   CarFront,
   CircleHelp,
   HeartPulse,
@@ -18,6 +19,7 @@ const categoryIcons: Record<string, LucideIcon> = {
 interface BudgetCardProps {
   budget: Budget;
   onEdit: (budget: Budget) => void;
+  onConfigureAlerts: (budget: Budget) => void;
 }
 
 function toCents(amount: string): bigint {
@@ -33,7 +35,7 @@ function fromCents(cents: bigint): string {
     .padStart(2, '0')}`;
 }
 
-export function BudgetCard({ budget, onEdit }: BudgetCardProps) {
+export function BudgetCard({ budget, onEdit, onConfigureAlerts }: BudgetCardProps) {
   const Icon =
     categoryIcons[budget.category_name.toLocaleLowerCase('es-PE')] ??
     CircleHelp;
@@ -72,14 +74,14 @@ export function BudgetCard({ budget, onEdit }: BudgetCardProps) {
         </div>
 
         {/* Botón editar */}
-        <button
-          type="button"
-          aria-label={`Editar presupuesto de ${budget.category_name}`}
-          onClick={() => onEdit(budget)}
-          className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white p-2 text-teal-600 transition-colors hover:bg-teal-50"
-        >
-          <Pencil aria-hidden="true" size={18} />
-        </button>
+        <div className="flex shrink-0 gap-2">
+          {budget.monthly_limit !== null && <button type="button" aria-label={`Configurar alertas para ${budget.category_name}`} onClick={() => onConfigureAlerts(budget)} className="flex size-11 items-center justify-center rounded-lg border border-gray-200 bg-white p-2 text-teal-700 transition-colors hover:bg-teal-50">
+            <BellRing aria-hidden="true" size={18} />
+          </button>}
+          <button type="button" aria-label={`Editar presupuesto de ${budget.category_name}`} onClick={() => onEdit(budget)} className="flex size-11 items-center justify-center rounded-lg border border-gray-200 bg-white p-2 text-teal-600 transition-colors hover:bg-teal-50">
+            <Pencil aria-hidden="true" size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Barra de progreso */}

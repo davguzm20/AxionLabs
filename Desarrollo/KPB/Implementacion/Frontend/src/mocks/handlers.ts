@@ -43,16 +43,6 @@ export const handlers = [
     budget.usage_percentage = Number(spentCents * 10_000n / limitCents) / 100;
     return HttpResponse.json(budget);
   }),
-  http.put('*/api/v1/budgets/:categoryId/alert-thresholds', async ({ params, request }) => {
-    const categoryId = String(params.categoryId);
-    const budget = mockBudgets.find((item) => item.category_id === categoryId);
-    const body = await request.json() as { thresholds?: number[] };
-    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
-    const threshold = body.thresholds?.[0];
-    if (!threshold || threshold < 1 || threshold > 100) return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'El porcentaje debe estar entre 1 y 100.' } }, { status: 422 });
-    budget.alert_threshold = threshold;
-    return HttpResponse.json({ thresholds: [threshold] });
-  }),
   http.post('*/transactions/text', async ({ request }) => {
     const body = await request.json() as { text?: string };
     const text = body.text ?? '';
@@ -121,3 +111,98 @@ export const handlers = [
     });
   }),
 ];
+
+type MockNotification = {
+  id: string;
+  type: string;
+  priority: 'normal' | 'high';
+  category: { id: string; name: string };
+  threshold_percentage: number;
+  usage_percentage: number;
+  spent_month: string;
+  monthly_limit: string;
+  remaining: string;
+  message: string;
+  read: boolean;
+  created_at: string;
+};
+
+const thresholdConfigs = new Map(mockBudgets.filter((budget) => budget.monthly_limit !== null).map((budget) => [budget.category_id, {
+  thresholds: [budget.alert_threshold], channels: ['app'], is_default: true,
+}]));
+const mockStartedAt = Date.now();
+let liveNotificationAdded = false;
+const mockNotifications: MockNotification[] = [
+  {
+    id: 'notif-food-75', type: 'budget_alert', priority: 'normal',
+    category: { id: 'cat-food', name: 'Alimentación' }, threshold_percentage: 75,
+    usage_percentage: 82.16, spent_month: '410.80', monthly_limit: '500.00', remaining: '89.20',
+    message: 'Llegaste al 75% de tu tope en Alimentación. Gastaste S/ 410.80 de S/ 500.00.',
+    read: false, created_at: new Date(mockStartedAt - 4 * 60_000).toISOString(),
+  },
+  {
+    id: 'notif-transport-100', type: 'budget_alert', priority: 'high',
+    category: { id: 'cat-transport', name: 'Transporte' }, threshold_percentage: 100,
+    usage_percentage: 105.25, spent_month: '84.20', monthly_limit: '80.00', remaining: '-4.20',
+    message: 'Superaste el 100% de tu tope en Transporte. Gastaste S/ 84.20 de S/ 80.00.',
+    read: false, created_at: new Date(mockStartedAt - 20 * 60_000).toISOString(),
+  },
+];
+
+handlers.unshift(
+  http.get('*/api/v1/budgets/:categoryId/alert-thresholds', ({ params }) => {
+    const categoryId = String(params.categoryId);
+    const config = thresholdConfigs.get(categoryId);
+    if (!config) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
+    return HttpResponse.json({ category_id: categoryId, ...config });
+  }),
+  http.put('*/api/v1/budgets/:categoryId/alert-thresholds', async ({ params, request }) => {
+    const categoryId = String(params.categoryId);
+    if (!mockBudgets.some((budget) => budget.category_id === categoryId && budget.monthly_limit !== null)) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
+    }
+    const body = await request.json() as { thresholds?: number[]; channels?: string[] };
+    const thresholds = body.thresholds;
+    if (!thresholds || thresholds.length < 1 || thresholds.length > 5 || thresholds.some((value) => !Number.isInteger(value) || value < 1 || value > 100) || new Set(thresholds).size !== thresholds.length) {
+      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'Configura entre uno y cinco porcentajes enteros del 1 al 100.' } }, { status: 422 });
+    }
+    const channels = body.channels ?? ['app'];
+    if (channels.some((channel) => !['app', 'email'].includes(channel))) {
+      return HttpResponse.json({ error: { code: 'INVALID_CHANNEL', message: 'Selecciona canales válidos.' } }, { status: 422 });
+    }
+    const config = { thresholds, channels, is_default: false };
+    thresholdConfigs.set(categoryId, config);
+    const budget = mockBudgets.find((item) => item.category_id === categoryId);
+    if (budget) budget.alert_threshold = thresholds[0] ?? budget.alert_threshold;
+    return HttpResponse.json({ category_id: categoryId, ...config });
+  }),
+  http.get('*/api/v1/notifications', ({ request }) => {
+    if (!liveNotificationAdded && Date.now() - mockStartedAt >= 10_000) {
+      liveNotificationAdded = true;
+      mockNotifications.unshift({
+        id: 'notif-live-food-90', type: 'budget_alert', priority: 'normal',
+        category: { id: 'cat-food', name: 'Alimentación' }, threshold_percentage: 90,
+        usage_percentage: 91.2, spent_month: '456.00', monthly_limit: '500.00', remaining: '44.00',
+        message: 'Llegaste al 90% de tu tope en Alimentación. Gastaste S/ 456.00 de S/ 500.00.',
+        read: false, created_at: new Date().toISOString(),
+      });
+    }
+    const params = new URL(request.url).searchParams;
+    const type = params.get('type');
+    const unread = params.get('unread');
+    const page = Math.max(1, Number(params.get('page') ?? 1));
+    const pageSize = Math.min(50, Math.max(1, Number(params.get('page_size') ?? 10)));
+    const filtered = mockNotifications.filter((item) => (!type || item.type === type) && (unread === null || item.read === (unread !== 'true')));
+    const offset = (page - 1) * pageSize;
+    return HttpResponse.json({
+      data: filtered.slice(offset, offset + pageSize),
+      pagination: { page, page_size: pageSize, total: filtered.length, pages: Math.ceil(filtered.length / pageSize) },
+    });
+  }),
+  http.patch('*/api/v1/notifications/:notificationId/read', ({ params }) => {
+    const notification = mockNotifications.find((item) => item.id === String(params.notificationId));
+    if (!notification) return new HttpResponse(null, { status: 404 });
+    notification.read = true;
+    return new HttpResponse(null, { status: 204 });
+  }),
+);

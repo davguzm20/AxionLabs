@@ -2,6 +2,8 @@ import { ChevronLeft, Info, X } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BudgetCard } from '../components/BudgetCard';
+import { ThresholdConfigModal } from '../../cu08/components/ThresholdConfigModal';
+import { Toast } from '../../../components/ui/Toast';
 import {
   BudgetFormModal,
   type BudgetFormValues,
@@ -27,6 +29,8 @@ export function BudgetsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState<Budget | null>(null);
   const [showInfo, setShowInfo] = useState(true);
+  const [thresholdBudget, setThresholdBudget] = useState<Budget | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const openForm = (budget: Budget | null = null) => {
     clearError();
@@ -65,6 +69,7 @@ export function BudgetsPage() {
               <h1 className="font-semibold text-ink-900">
                 Presupuestos
               </h1>
+              {period && <p className="text-xs text-gray-500">{period}</p>}
             </div>
           </header>
 
@@ -139,6 +144,7 @@ export function BudgetsPage() {
                   key={budget.category_id}
                   budget={budget}
                   onEdit={(item) => openForm(item)}
+                  onConfigureAlerts={(item) => setThresholdBudget(item)}
                 />
               ))}
             </section>
@@ -166,6 +172,18 @@ export function BudgetsPage() {
           onSubmit={submit}
         />
       )}
+      {thresholdBudget && (
+        <ThresholdConfigModal
+          categoryId={thresholdBudget.category_id}
+          categoryName={thresholdBudget.category_name}
+          onClose={() => setThresholdBudget(null)}
+          onSaved={(message) => {
+            setToastMessage(message);
+            window.setTimeout(() => setToastMessage(null), 3000);
+          }}
+        />
+      )}
+      {toastMessage && <div className="fixed right-4 top-16 z-[60]"><Toast message={toastMessage} /></div>}
     </>
   );
 }

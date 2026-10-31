@@ -1,16 +1,18 @@
 import { Bell, ChevronRight, DollarSign, Lock, PieChart, User } from 'lucide-react';
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { NotificationBell } from '../../cu08/components/NotificationBell';
+import { useAlertPreferences } from '../../../hooks/useAlertPreferences';
 
 export function SettingsPage() {
   const navigate = useNavigate();
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const { enabled: alertVisualsEnabled, setEnabled: setAlertVisualsEnabled } = useAlertPreferences();
 
   return (
     <main className="h-full w-full overflow-y-auto bg-gray-50 px-4 pb-24 sm:px-6">
       <div className="mx-auto w-full max-w-3xl">
-        <header className="sticky top-0 z-10 -mx-4 mb-4 flex h-[4.5rem] items-center border-b border-gray-200 bg-white px-4 sm:-mx-6 sm:px-6">
+        <header className="sticky top-0 z-10 mb-4 flex h-[4.5rem] items-center justify-between border-b border-gray-200 bg-white">
           <h1 className="font-semibold text-ink-900">Ajustes</h1>
+          <NotificationBell />
         </header>
 
         <section aria-label="Perfil" className="mb-6 flex items-center gap-4 rounded-xl border border-ink-300 bg-white p-5 shadow-sm">
@@ -47,19 +49,19 @@ export function SettingsPage() {
             <div className="flex w-full items-center justify-between border-b border-ink-300 p-4">
               <span className="flex items-center gap-3">
                 <Bell aria-hidden="true" className="shrink-0 text-gray-600" size={20} />
-                <span className="text-sm font-medium text-gray-800">Notificaciones</span>
+                <span className="text-sm font-medium text-gray-800">Sonidos de alerta</span>
               </span>
               <button
                 type="button"
                 role="switch"
-                aria-checked={notificationsEnabled}
-                aria-label="Notificaciones"
-                onClick={() => setNotificationsEnabled((enabled) => !enabled)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${notificationsEnabled ? 'bg-teal-600' : 'bg-gray-300'
+                aria-checked={alertVisualsEnabled}
+                aria-label="Sonidos de alerta"
+                onClick={() => setAlertVisualsEnabled(!alertVisualsEnabled)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${alertVisualsEnabled ? 'bg-teal-600' : 'bg-gray-300'
                   }`}
               >
                 <span
-                  className={`pointer-events-none absolute left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-in-out ${notificationsEnabled ? 'translate-x-5' : 'translate-x-0'
+                  className={`pointer-events-none absolute left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-in-out ${alertVisualsEnabled ? 'translate-x-5' : 'translate-x-0'
                     }`}
                 />
               </button>
