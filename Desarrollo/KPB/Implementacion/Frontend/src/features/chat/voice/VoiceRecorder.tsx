@@ -114,8 +114,8 @@ export function VoiceRecorder({ onClose, onSubmit }: VoiceRecorderProps) {
       };
       recorder.onstop = () => {
         stopTracks();
-        setRecording(false);
         if (cancelledRef.current) return;
+        setRecording(false);
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         if (blob.size > MAX_AUDIO_BYTES) {
           setError('El audio supera los 5 MB. Graba un mensaje más corto.');
