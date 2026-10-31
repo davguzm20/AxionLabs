@@ -25,7 +25,7 @@ export function WalletCard({ wallet, onEdit }: WalletCardProps) {
 
           {/* Nombre y estado */}
           <div className="min-w-0">
-            <h2 className="truncate font-semibold text-ink-900">
+            <h2 className="truncate text-base font-semibold text-gray-900">
               {wallet.name}
             </h2>
 
@@ -50,11 +50,11 @@ export function WalletCard({ wallet, onEdit }: WalletCardProps) {
 
       {/* Saldo */}
       <div className="mt-2 pt-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-ink-500">
+        <p className="text-xs font-medium uppercase tracking-wider text-gray-500">
           Saldo actual
         </p>
 
-        <p className="mt-1 text-2xl font-bold leading-tight tabular-nums text-ink-900">
+        <p className="mt-1 text-lg font-bold tabular-nums text-gray-900">
           {formatBalance(wallet.balance, wallet.currency)}
         </p>
       </div>

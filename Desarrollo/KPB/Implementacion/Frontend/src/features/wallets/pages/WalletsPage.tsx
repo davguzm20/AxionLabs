@@ -1,4 +1,4 @@
-import { Info, Plus, RotateCw, Wallet as WalletIcon, X } from 'lucide-react';
+import { Info, RotateCw, Wallet as WalletIcon, X } from 'lucide-react';
 import { useState } from 'react';
 import { WalletCard } from '../components/WalletCard';
 import { WalletForm, type WalletFormValues } from '../components/WalletForm';
@@ -51,18 +51,18 @@ export function WalletsPage() {
 
   return (
     <>
-      <main className="h-full w-full overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-24 sm:px-6">
+      <main className="h-full w-full overflow-y-auto bg-gray-50 px-4 pb-24 sm:px-6">
         <div className="mx-auto w-full max-w-6xl">
-          <header>
-            <h1 className="mb-6 font-semibold text-ink-900">Monederos</h1>
+          <header className="sticky top-0 z-10 -mx-4 mb-4 flex h-[4.5rem] items-center border-b border-gray-200 bg-white px-4 sm:-mx-6 sm:px-6">
+            <h1 className="font-semibold text-ink-900">Monederos</h1>
           </header>
 
           {showInfo && (
             <aside className="mb-4 flex items-start gap-3 rounded-xl border border-ink-300 bg-white p-4 shadow-sm">
               <Info aria-hidden="true" className="mt-0.5 shrink-0 text-brand-600" size={20} />
               <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink-900">¿Cómo funciona un monedero?</p>
-                <p className="mt-1 text-sm text-ink-500">Organiza por separado el dinero que tienes en tus cuentas bancarias y en efectivo.</p>
+                <p className="text-sm font-semibold text-ink-900">¿Cómo funciona un monedero?</p>
+                <p className="mt-1 text-sm leading-6 text-gray-600">Organiza por separado el dinero que tienes en tus cuentas bancarias y en efectivo.</p>
               </div>
               <button type="button" aria-label="Cerrar información" onClick={() => setShowInfo(false)} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-ink-700 hover:bg-bg">
                 <X aria-hidden="true" size={18} />
@@ -100,8 +100,8 @@ export function WalletsPage() {
             <p className="text-xs font-medium text-ink-500">No conecta cuentas ni mueve dinero real.</p>
           </div>
 
-          <button type="button" onClick={openCreate} className="mt-4 mb-8 flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">
-            <Plus aria-hidden="true" size={20} strokeWidth={2.5} /> Nuevo monedero
+          <button type="button" onClick={openCreate} className="mt-4 mb-8 flex min-h-11 w-full items-center justify-center rounded-xl bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">
+            Nuevo monedero
           </button>
         </div>
       </main>

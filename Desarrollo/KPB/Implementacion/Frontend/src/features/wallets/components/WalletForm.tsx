@@ -44,7 +44,7 @@ export function WalletForm({ wallet = null, saving, error, onClose, onSubmit }: 
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-950/50 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="wallet-form-title" className="max-h-[94dvh] w-full overflow-y-auto rounded-t-xl border border-gray-200 bg-white p-5 shadow-xl sm:max-w-lg sm:rounded-xl sm:p-7">
+      <section role="dialog" aria-modal="true" aria-labelledby="wallet-form-title" className="max-h-[94dvh] w-full overflow-y-auto rounded-t-xl border border-gray-200 bg-white p-5 pb-16 shadow-xl sm:max-w-lg sm:rounded-xl sm:p-7 sm:pb-16">
         <header className="mb-6 flex items-start justify-between gap-4">
           <div>
             <h2 id="wallet-form-title" className="text-lg font-semibold text-ink-900">{editing ? 'Editar monedero' : 'Nuevo monedero'}</h2>
@@ -94,9 +94,9 @@ export function WalletForm({ wallet = null, saving, error, onClose, onSubmit }: 
 
           {error && <p role="alert" className="mt-3 text-sm text-danger-600">{error}</p>}
 
-          <div className="flex flex-col-reverse gap-3 pt-1 sm:flex-row sm:justify-end">
-            <button type="button" onClick={onClose} className="min-h-11 rounded-md border border-ink-300 bg-white px-4 font-semibold text-ink-900 hover:bg-bg">Cancelar</button>
-            <button type="submit" disabled={saving} className="min-h-11 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-wait disabled:opacity-60">
+          <div className="mt-6 flex w-full flex-row gap-3">
+            <button type="button" onClick={onClose} className="min-h-11 flex-1 rounded-md border border-ink-300 bg-white px-4 font-semibold text-ink-900 hover:bg-bg">Cancelar</button>
+            <button type="submit" disabled={saving} className="min-h-11 flex-1 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-wait disabled:opacity-60">
               {saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Crear monedero'}
             </button>
           </div>
