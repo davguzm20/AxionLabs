@@ -3,14 +3,20 @@ from fastapi.responses import RedirectResponse
 
 from app.core.errors import register_error_handlers
 from app.modules.auth.router import router as auth_router
+from app.modules.transactions.router import router as transactions_router
 
 app = FastAPI(
     title="KhipuBot API",
     version="0.1.0",
 )
 app.openapi_version = "3.0.3"
+
+# Registro de manejadores de error globales de la API
 register_error_handlers(app)
+
+# Registro de módulos funcionales (CU)
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(transactions_router, prefix="/api/v1")
 
 
 @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)

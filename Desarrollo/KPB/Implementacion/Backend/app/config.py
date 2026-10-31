@@ -40,3 +40,21 @@ class AuthSettings(BaseSettings):
 @lru_cache
 def get_auth_settings() -> AuthSettings:
     return AuthSettings()
+
+
+class AISettings(BaseSettings):
+    """Configuración para servicios de Inteligencia Artificial (OpenAI o Mock).
+
+    Si openai_api_key no está presente o es vacía, el sistema usa el extractor
+    simulado (Mock) para desarrollo local y pruebas sin costo.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    openai_api_key: str | None = None
+    openai_text_model: str = "gpt-4o-mini"
+
+
+@lru_cache
+def get_ai_settings() -> AISettings:
+    return AISettings()
