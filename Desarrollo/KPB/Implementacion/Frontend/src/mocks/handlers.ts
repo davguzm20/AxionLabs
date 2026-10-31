@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { Wallet } from '../features/wallets/types/wallet.types';
 
 type TransactionType = 'EXPENSE' | 'INCOME';
 type MockCategory = { id: string; name: string; type: TransactionType; icon: string; source?: string };
@@ -27,7 +28,22 @@ const categoryCatalog: MockCategory[] = [
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
+const savedWallets: Wallet[] = [
+  {
+    id: 'wallet-cash-default',
+    name: 'Efectivo',
+    type: 'cash',
+    currency: 'PEN',
+    balance: '150.00',
+    is_default: true,
+  },
+];
 const today = () => new Date().toISOString().slice(0, 10);
+
+function hasDuplicateWalletName(name: string, excludeId?: string): boolean {
+  const normalizedName = name.trim().toLocaleLowerCase('es-PE');
+  return savedWallets.some((wallet) => wallet.id !== excludeId && wallet.name.trim().toLocaleLowerCase('es-PE') === normalizedName);
+}
 
 function amountToCents(amount: string): bigint {
   const [whole = '0', fraction = '00'] = amount.split('.');
@@ -46,6 +62,47 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
+  http.get('*/api/v1/wallets', () => HttpResponse.json({ data: savedWallets })),
+  http.post('*/api/v1/wallets', async ({ request }) => {
+    const body = await request.json() as Partial<Wallet>;
+    const name = body.name?.trim() ?? '';
+    if (hasDuplicateWalletName(name)) {
+      return HttpResponse.json(
+        { error: { code: 'WALLET_NAME_EXISTS', message: 'El nombre del monedero ya está en uso.' } },
+        { status: 409 },
+      );
+    }
+
+    const wallet: Wallet = {
+      id: crypto.randomUUID(),
+      name,
+      type: body.type === 'bank' ? 'bank' : 'cash',
+      currency: 'PEN',
+      balance: body.balance ?? '0.00',
+      is_default: savedWallets.length === 0,
+    };
+    savedWallets.push(wallet);
+    return HttpResponse.json(wallet, { status: 201 });
+  }),
+  http.patch('*/api/v1/wallets/:id', async ({ params, request }) => {
+    const walletId = String(params.id);
+    const wallet = savedWallets.find((item) => item.id === walletId);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el monedero.' } }, { status: 404 });
+    }
+
+    const body = await request.json() as { name?: string; balance?: string };
+    const name = body.name?.trim() ?? wallet.name;
+    if (hasDuplicateWalletName(name, walletId)) {
+      return HttpResponse.json(
+        { error: { code: 'WALLET_NAME_EXISTS', message: 'El nombre del monedero ya está en uso.' } },
+        { status: 409 },
+      );
+    }
+
+    Object.assign(wallet, { name, ...(body.balance !== undefined ? { balance: body.balance } : {}) });
+    return HttpResponse.json(wallet);
+  }),
   http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog)),
   http.post('*/api/v1/categories/suggest', async ({ request }) => {
     const body = await request.json() as { type?: TransactionType; concept?: string };
