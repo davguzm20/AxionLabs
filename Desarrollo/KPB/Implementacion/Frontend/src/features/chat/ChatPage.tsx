@@ -9,6 +9,8 @@ import { ConfirmationCard, type Transaction } from './components/ConfirmationCar
 import { TransactionPreviewCard } from './components/TransactionPreviewCard';
 import { VoiceRecorder } from './voice/VoiceRecorder';
 import { confirmVoicePreview, createVoicePreview } from './voice/voiceService';
+import { confirmReceiptPreview, createReceiptPreview } from './receipt/receiptService';
+import { validateReceiptImage } from './receipt/imageValidation';
 import type { TransactionDraft, TransactionPreview } from './transactionPreview.types';
 
 type ChatMessage =
@@ -95,6 +97,45 @@ export function ChatPage() {
     }
   }
 
+  async function sendReceipt(image: File) {
+    const validationError = await validateReceiptImage(image);
+    if (validationError) {
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        kind: 'bubble',
+        author: 'bot',
+        text: validationError,
+        botMood: 'surprised',
+      }]);
+      return;
+    }
+
+    setSending(true);
+    try {
+      const preview = await createReceiptPreview(image);
+      setMessages((current) => [...current.slice(-48), {
+        id: preview.preview_id,
+        kind: 'preview',
+        source: 'RECEIPT',
+        preview,
+        imageFile: image,
+      }]);
+      requestAnimationFrame(() => {
+        if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+      });
+    } catch (error) {
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        kind: 'bubble',
+        author: 'bot',
+        text: error instanceof Error ? error.message : 'No se pudo leer el comprobante. Inténtalo nuevamente.',
+        botMood: 'sad',
+      }]);
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function confirmPreview(messageId: string, source: 'VOICE' | 'RECEIPT', draft: TransactionDraft) {
     setMessages((current) => current.map((message) => message.kind === 'preview' && message.id === messageId
       ? { ...message, isSaving: true, saveError: undefined }
@@ -104,7 +145,7 @@ export function ChatPage() {
       if (!preview || preview.kind !== 'preview') return;
       const response = source === 'VOICE'
         ? await confirmVoicePreview(preview.preview.preview_id, draft)
-        : await Promise.reject(new Error('La confirmación de comprobantes todavía no está disponible.'));
+        : await confirmReceiptPreview(preview.preview.preview_id, draft, preview.preview.ocr_text);
       setMessages((current) => {
         const next = current.map((message) => message.kind === 'preview' && message.id === messageId
           ? { id: message.id, kind: 'confirmation' as const, transaction: response.transaction, walletName: response.wallet_name ?? 'Monedero' }
@@ -192,12 +233,7 @@ export function ChatPage() {
           onChange={setDraft}
           onSend={sendText}
           onVoice={() => setVoiceRecorderOpen(true)}
-          onReceiptFile={() => setMessages((current) => [...current, {
-            id: crypto.randomUUID(),
-            kind: 'bubble',
-            author: 'bot',
-            text: 'La lectura de comprobantes estará disponible en el siguiente avance.',
-          }])}
+          onReceiptFile={sendReceipt}
           disabled={sending}
           textareaRef={inputRef}
         />

@@ -125,6 +125,64 @@ export const handlers = [
       alerts: [],
     }, { status: 201 });
   }),
+  http.post('*/transactions/receipt', async ({ request }) => {
+    const body = await request.formData();
+    const image = body.get('image');
+    if (!(image instanceof File)) {
+      return HttpResponse.json({ error: { code: 'IMAGE_INVALID', message: 'Selecciona una imagen JPG o PNG.' } }, { status: 422 });
+    }
+    if (image.name.toLowerCase().includes('falla')) {
+      return HttpResponse.json({ error: { code: 'OCR_UNAVAILABLE', message: 'El servicio de lectura de imágenes no está disponible. Ingresa los datos manualmente.' } }, { status: 503 });
+    }
+    return HttpResponse.json({
+      preview_id: 'receipt-preview-20261031-001',
+      ocr_text: 'SUPERMERCADO XYZ\nRUC 20123456789\nTOTAL S/ 45.90',
+      extracted: {
+        type: 'EXPENSE',
+        amount: '45.90',
+        currency: 'PEN',
+        concept: 'Supermercado XYZ',
+        merchant: 'Supermercado XYZ',
+        ruc: '20123456789',
+        transaction_date: '2026-10-31',
+        wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
+        category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },
+      },
+      confidence: 0.88,
+      requires_confirmation: true,
+    }, { status: 200 });
+  }),
+  http.post('*/transactions/receipt/confirm', async ({ request }) => {
+    const body = await request.json() as {
+      type: 'EXPENSE' | 'INCOME';
+      amount: string;
+      currency: string;
+      concept: string;
+      transaction_date: string;
+      category_id: string;
+      wallet_id: string;
+    };
+    const categoryName = body.category_id === 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'
+      ? 'Alimentación'
+      : body.category_id === 'c815c08e-0300-4c4a-a4f0-9d6747347f09'
+        ? 'Transporte'
+        : body.type === 'INCOME' ? 'Ingresos' : 'Otros';
+    return HttpResponse.json({
+      transaction: {
+        id: 'receipt-transaction-20261031-001',
+        type: body.type,
+        amount: body.amount,
+        currency: body.currency,
+        concept: body.concept,
+        transaction_date: body.transaction_date,
+        wallet_id: body.wallet_id,
+        category: { id: body.category_id, name: categoryName, icon: 'circle-help', type: body.type },
+      },
+      wallet_name: 'BCP',
+      wallet_balance: '124.10',
+      alerts: [],
+    }, { status: 201 });
+  }),
   http.post('*/auth/login', async ({ request }) => {
     const body = await request.json() as { email?: string; password?: string };
     if (body.email !== 'demo@test.com' || body.password !== '123456') {
