@@ -8,6 +8,7 @@ import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { ChatPage } from '../features/chat/ChatPage';
+import { ClassificationPage } from '../features/classification/pages/ClassificationPage';
 
 export function AppRoutes() {
   return (
@@ -20,6 +21,7 @@ export function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route path="/inicio" element={<ChatPage />} />
+          <Route path="/clasificar" element={<ClassificationPage />} />
           <Route path="/historial" element={<PlaceholderPage title="Historial" />} />
           <Route path="/monederos" element={<PlaceholderPage title="Monederos" />} />
           <Route path="/ajustes" element={<PlaceholderPage title="Ajustes" />} />

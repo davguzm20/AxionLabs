@@ -5,14 +5,15 @@ import { ChatBubble } from './components/ChatBubble';
 import type { BotMood } from './components/ChatBubble';
 import { AlertCard, type BudgetAlert } from './components/AlertCard';
 import { ChatInput } from './components/ChatInput';
-import { ConfirmationCard, type Transaction } from './components/ConfirmationCard';
+import { ConfirmationCard, type Transaction, type TransactionStatus } from './components/ConfirmationCard';
 
 type ChatMessage =
   | { id: string; kind: 'bubble'; author: 'bot' | 'user'; text: string; botMood?: BotMood }
-  | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string }
+  | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string; status: TransactionStatus; isSaving?: boolean; saveError?: string }
   | { id: string; kind: 'alert'; alert: BudgetAlert };
-type TextResponse = { transaction: Transaction; wallet_name?: string; message: string; botMood?: BotMood; alerts?: BudgetAlert[] };
-type TextApiError = Error & { status?: number; code?: string };
+type ExtractionResponse = { transaction: Transaction };
+type SaveResponse = { transaction: Transaction; budget_alert?: BudgetAlert | null; wallet_name?: string };
+type ApiError = Error & { status?: number; code?: string };
 
 const walletId = '4d6b3036-4290-4bde-aea4-375c779ef48b';
 
@@ -27,9 +28,7 @@ export function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (!sending) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
+    if (!sending) requestAnimationFrame(() => inputRef.current?.focus());
   }, [sending]);
 
   async function sendText(text: string) {
@@ -40,22 +39,24 @@ export function ChatPage() {
     setSending(true);
     setRetryText(value);
     try {
-      const response = await api<TextResponse>('/transactions/text', {
+      const response = await api<ExtractionResponse>('/extractions/text', {
         method: 'POST',
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({ text: value, wallet_id: walletId, client_timezone: 'America/Lima' }),
       });
-      setMessages((current) => [...current.slice(-48),
-        { id: response.transaction.id, kind: 'confirmation', transaction: response.transaction, walletName: response.wallet_name ?? 'Monedero' },
-        ...(response.alerts ?? []).map((alert) => ({ id: crypto.randomUUID(), kind: 'alert' as const, alert })),
-      ]);
+      setMessages((current) => [...current.slice(-48), {
+        id: response.transaction.id,
+        kind: 'confirmation',
+        transaction: response.transaction,
+        walletName: 'BCP',
+        status: 'extracted',
+      }]);
       setDraft('');
       setRetryText(undefined);
     } catch (error) {
-      const apiError = error as TextApiError;
+      const apiError = error as ApiError;
       const message = apiError.code === 'AMOUNT_NOT_FOUND'
         ? 'No pude identificar el monto. ¿Cuánto fue el gasto/ingreso?'
-        : 'El servicio no está disponible. Por favor intente nuevamente.';
+        : 'No pude extraer los datos. Inténtalo nuevamente.';
       setMessages((current) => [...current.slice(-49), {
         id: crypto.randomUUID(),
         kind: 'bubble',
@@ -68,6 +69,41 @@ export function ChatPage() {
       requestAnimationFrame(() => {
         if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
       });
+    }
+  }
+
+  async function confirmTransaction(messageId: string, transaction: Transaction) {
+    setMessages((current) => current.map((message) => message.kind === 'confirmation' && message.id === messageId
+      ? { ...message, isSaving: true, saveError: undefined }
+      : message));
+    try {
+      const response = await api<SaveResponse>('/transactions', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({
+          type: transaction.type,
+          amount: transaction.amount,
+          currency: transaction.currency,
+          concept: transaction.concept,
+          transaction_date: transaction.transaction_date,
+          wallet_id: transaction.wallet_id,
+          category_id: transaction.category.id,
+        }),
+      });
+      setMessages((current) => {
+        const confirmationIndex = current.findIndex((message) => message.kind === 'confirmation' && message.id === messageId);
+        const next = current.map((message) => message.kind === 'confirmation' && message.id === messageId
+          ? { ...message, transaction: response.transaction, status: 'confirmed' as const, isSaving: false, saveError: undefined }
+          : message);
+        if (response.budget_alert && confirmationIndex >= 0) {
+          next.splice(confirmationIndex + 1, 0, { id: crypto.randomUUID(), kind: 'alert', alert: response.budget_alert });
+        }
+        return next;
+      });
+    } catch {
+      setMessages((current) => current.map((message) => message.kind === 'confirmation' && message.id === messageId
+        ? { ...message, isSaving: false, saveError: 'No se pudo guardar la transacción. Inténtalo nuevamente.' }
+        : message));
     }
   }
 
@@ -85,9 +121,18 @@ export function ChatPage() {
         {messages.map((message) => message.kind === 'bubble'
           ? <ChatBubble key={message.id} author={message.author} botMood={message.botMood}>{message.text}</ChatBubble>
           : message.kind === 'confirmation'
-            ? <ConfirmationCard key={message.id} transaction={message.transaction} walletName={message.walletName} />
+            ? <div key={message.id}>
+              <ConfirmationCard
+                transaction={message.transaction}
+                walletName={message.walletName}
+                status={message.status}
+                isAccepting={message.isSaving}
+                onAccept={(transaction) => void confirmTransaction(message.id, transaction)}
+              />
+              {message.saveError && <p role="alert" className="ml-[4.25rem] mt-2 text-sm text-danger-600">{message.saveError}</p>}
+            </div>
             : <AlertCard key={message.id} alert={message.alert} />)}
-        {sending && <div className="flex items-center gap-2 text-sm text-ink-500" role="status"><img src="/logo.png" alt="" className="h-8 w-8 rounded-full" />KhipuBot está escribiendo…</div>}
+        {sending && <div className="flex items-center gap-2 text-sm text-ink-500" role="status"><img src="/logo.png" alt="" className="h-8 w-8 rounded-full" />KhipuBot está preparando la transacción…</div>}
         {retryText && !sending && (
           <div className="flex items-start gap-3">
             <span aria-hidden="true" className="h-14 w-14 shrink-0" />
