@@ -40,6 +40,8 @@ describe('MSW del historial', () => {
 
     const beforeResponse = await fetch(`${API}/transactions/summary?${new URLSearchParams(currentMonthRange())}`, { headers });
     const before = await beforeResponse.json();
+    const walletBeforeResponse = await fetch(`${API}/wallets`, { headers });
+    const walletBefore = (await walletBeforeResponse.json()).data.find((wallet: { id: string }) => wallet.id === '4d6b3036-4290-4bde-aea4-375c779ef48b').balance;
     const updateResponse = await fetch(`${API}/transactions/history-dinner`, {
       method: 'PATCH',
       headers,
@@ -52,5 +54,8 @@ describe('MSW del historial', () => {
     const afterResponse = await fetch(`${API}/transactions/summary?${new URLSearchParams(currentMonthRange())}`, { headers });
     const after = await afterResponse.json();
     expect(after.by_currency).toEqual(before.by_currency);
+    const walletAfterResponse = await fetch(`${API}/wallets`, { headers });
+    const walletAfter = (await walletAfterResponse.json()).data.find((wallet: { id: string }) => wallet.id === '4d6b3036-4290-4bde-aea4-375c779ef48b').balance;
+    expect(walletAfter).toBe(walletBefore);
   });
 });

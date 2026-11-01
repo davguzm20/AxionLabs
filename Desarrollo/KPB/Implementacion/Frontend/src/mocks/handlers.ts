@@ -50,7 +50,7 @@ const savedTransactions = new Map<string, MockTransaction>();
 let savedNotifications: MockNotification[] = [];
 let savedPreferences = { main_currency: 'PEN' as const, email_notifications: true };
 const notificationSubscribers = new Set<(event: NotificationEvent) => void>();
-const savedWallets: Wallet[] = [
+const mockWalletSeeds: Wallet[] = [
   {
     id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
     name: 'BCP',
@@ -68,6 +68,7 @@ const savedWallets: Wallet[] = [
     is_default: false,
   },
 ];
+const savedWallets: Wallet[] = mockWalletSeeds.map((wallet) => ({ ...wallet }));
 const MOCK_TODAY = new Date();
 const mockBudgetSeeds = [
   {
@@ -232,6 +233,7 @@ resetSavedTransactions();
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
   resetSavedTransactions();
+  savedWallets.splice(0, savedWallets.length, ...mockWalletSeeds.map((wallet) => ({ ...wallet })));
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
 }
@@ -260,6 +262,12 @@ function hasDuplicateWalletName(name: string, excludeId?: string): boolean {
 function amountToCents(amount: string): bigint {
   const [whole = '0', fraction = '00'] = amount.split('.');
   return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+}
+
+function updateWalletBalance(wallet: Wallet, type: TransactionType, amount: string) {
+  const transactionCents = amountToCents(amount);
+  const signedCents = type === 'INCOME' ? transactionCents : -transactionCents;
+  wallet.balance = centsToMoney(amountToCents(wallet.balance) + signedCents);
 }
 
 function isValidBudgetAmount(value: string): boolean {
@@ -878,6 +886,13 @@ export const handlers = [
     if (body.currency !== 'PEN' && body.currency !== 'USD') {
       return HttpResponse.json({ error: { code: 'INVALID_CURRENCY', message: 'Selecciona una moneda válida.' } }, { status: 422 });
     }
+    const wallet = savedWallets.find(({ id }) => id === body.wallet_id);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Selecciona un monedero disponible.' } }, { status: 422 });
+    }
+    if (wallet.currency !== body.currency) {
+      return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type);
     if (!category) {
       return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.' } }, { status: 422 });
@@ -896,6 +911,7 @@ export const handlers = [
       created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
+    updateWalletBalance(wallet, transaction.type, transaction.amount);
     const alerts = body.type === 'EXPENSE'
       ? evaluateMockBudgetAlerts({
         categoryId: category.id,
@@ -966,6 +982,16 @@ export const handlers = [
       category_id: string;
       wallet_id: string;
     };
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+    const wallet = savedWallets.find(({ id }) => id === body.wallet_id);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Selecciona un monedero disponible.' } }, { status: 422 });
+    }
+    if (wallet.currency !== body.currency) {
+      return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
       ?? findSuggestedCategory(body.type, '');
     const transaction: MockTransaction = {
@@ -981,6 +1007,7 @@ export const handlers = [
       created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
+    updateWalletBalance(wallet, transaction.type, transaction.amount);
     const alerts = body.type === 'EXPENSE'
       ? evaluateMockBudgetAlerts({
         categoryId: category.id,
@@ -1032,6 +1059,16 @@ export const handlers = [
       category_id: string;
       wallet_id: string;
     };
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+    const wallet = savedWallets.find(({ id }) => id === body.wallet_id);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Selecciona un monedero disponible.' } }, { status: 422 });
+    }
+    if (wallet.currency !== body.currency) {
+      return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
       ?? findSuggestedCategory(body.type, '');
     const transaction: MockTransaction = {
@@ -1047,6 +1084,7 @@ export const handlers = [
       created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
+    updateWalletBalance(wallet, transaction.type, transaction.amount);
     const alerts = body.type === 'EXPENSE'
       ? evaluateMockBudgetAlerts({
         categoryId: category.id,
