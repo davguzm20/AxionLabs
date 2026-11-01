@@ -188,7 +188,7 @@ function shiftDate(value: Date, days: number): string {
 function createSeedTransactions(): MockTransaction[] {
   const now = new Date();
   const todayDate = dateToString(now);
-  const yesterday = shiftDate(now, -1);
+  const yesterday = now.getDate() === 1 ? todayDate : shiftDate(now, -1);
   const createdAt = (date: string, time: string) => `${date}T${time}:00-05:00`;
   const seed = (
     id: string,

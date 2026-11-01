@@ -16,11 +16,15 @@ export interface HistoryTransaction {
   currency: string;
   concept: string;
   merchant?: string | null;
+  ruc?: string | null;
   transaction_date: string;
   wallet_id: string;
   category: HistoryCategory;
   source: HistoryTransactionSource;
   needs_review?: boolean;
+  category_confidence?: number | null;
+  transcript?: string | null;
+  ocr_text?: string | null;
   created_at?: string;
 }
 

@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   BriefcaseBusiness,
   CalendarDays,
@@ -17,7 +18,8 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useHistory } from '../hooks/useHistory';
-import type { HistoryFilters, HistoryTransaction, HistoryTransactionType } from '../types/history.types';
+import { getTransaction } from '../services/historyService';
+import type { HistoryCategory, HistoryFilters, HistoryTransaction, HistoryTransactionType, TransactionCorrection } from '../types/history.types';
 
 type TypeFilter = 'ALL' | HistoryTransactionType;
 
@@ -126,6 +128,169 @@ function SummaryCards({ summary }: { summary: ReturnType<typeof useHistory>['sum
   );
 }
 
+function HistoryDetailPanel({ transactionId, walletNames, categories, onClose, onSave, isSaving }: {
+  transactionId: string;
+  walletNames: Map<string, string>;
+  categories: HistoryCategory[];
+  onClose: () => void;
+  onSave: (correction: TransactionCorrection) => Promise<HistoryTransaction>;
+  isSaving: boolean;
+}) {
+  const panelRef = useRef<HTMLElement>(null);
+  const transactionQuery = useQuery({
+    queryKey: ['history', 'transaction', transactionId],
+    queryFn: ({ signal }) => getTransaction(transactionId, signal),
+  });
+  const transaction = transactionQuery.data;
+  const [categoryId, setCategoryId] = useState('');
+  const [concept, setConcept] = useState('');
+  const [editingCategory, setEditingCategory] = useState(false);
+  const [editingConcept, setEditingConcept] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    if (!transaction) return;
+    setCategoryId(transaction.category?.id ?? '');
+    setConcept(transaction.concept ?? '');
+  }, [transaction]);
+
+  useEffect(() => {
+    panelRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !panelRef.current) return;
+      const focusable = panelRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      const first = focusable.item(0);
+      const last = focusable.item(focusable.length - 1);
+      if (!first || !last) {
+        event.preventDefault();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  const matchingCategories = categories.filter((category) => !category.type || category.type === transaction?.type);
+  const hasChanges = Boolean(transaction) && (
+    (editingCategory && categoryId !== transaction?.category?.id)
+    || (editingConcept && concept.trim() !== transaction?.concept)
+  );
+
+  const saveChanges = async () => {
+    if (!transaction || !hasChanges) return;
+    const correction: TransactionCorrection = {};
+    const categoryChanged = editingCategory && categoryId !== transaction.category?.id;
+    const conceptChanged = editingConcept && concept.trim() !== transaction.concept;
+    if (categoryChanged) correction.category_id = categoryId;
+    if (conceptChanged) correction.concept = concept.trim();
+    setActionError('');
+    try {
+      const updated = await onSave(correction);
+      setCategoryId(updated.category?.id ?? '');
+      setConcept(updated.concept ?? '');
+      setEditingCategory(false);
+      setEditingConcept(false);
+      setSuccessMessage(categoryChanged && conceptChanged
+        ? 'Categoría y concepto actualizados.'
+        : categoryChanged ? 'Categoría actualizada.' : 'Concepto actualizado.');
+    } catch {
+      setActionError('No se pudieron guardar los cambios. Inténtalo de nuevo.');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/40 sm:items-stretch sm:justify-end" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="history-detail-title" className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl focus:outline-none sm:h-full sm:max-h-none sm:max-w-[42rem] sm:rounded-none sm:p-7">
+        <div className="flex items-center justify-between gap-3">
+          <h2 id="history-detail-title" className="text-lg font-semibold text-ink-900">Detalle del movimiento</h2>
+          <button type="button" aria-label="Cerrar detalle" onClick={onClose} className="inline-flex size-11 items-center justify-center rounded-md text-ink-600 hover:bg-bg"><X aria-hidden="true" size={20} /></button>
+        </div>
+        {transactionQuery.isPending ? (
+          <p role="status" className="py-8 text-sm text-ink-600">Cargando movimiento…</p>
+        ) : transactionQuery.error || !transaction ? (
+          <section role="alert" className="mt-5 rounded-lg border border-danger-300 p-4 text-sm text-danger-700">
+            <p>No pudimos cargar el detalle.</p>
+            <button type="button" onClick={() => void transactionQuery.refetch()} className="mt-2 min-h-11 rounded-md px-3 font-medium text-brand-700 hover:bg-brand-50">Reintentar</button>
+          </section>
+        ) : (
+          <>
+            <p className={`mt-5 text-2xl font-semibold ${transaction.type === 'INCOME' ? 'text-success-700' : 'text-danger-700'}`}>{formatSignedMoney(transaction)}</p>
+            <p className="mt-1 text-sm text-ink-600">{transaction.concept || 'Sin concepto'}</p>
+            {transaction.needs_review && <p className="mt-2 inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">Por revisar</p>}
+            <dl className="mt-5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 border-y border-ink-200 py-4 text-sm">
+              <dt className="text-ink-500">Fecha</dt><dd>{groupLabel(transaction.transaction_date)} · {transaction.transaction_date}</dd>
+              <dt className="text-ink-500">Tipo</dt><dd>{transaction.type === 'INCOME' ? 'Ingreso' : 'Gasto'}</dd>
+              <dt className="text-ink-500">Monedero</dt><dd>{walletNames.get(transaction.wallet_id) ?? 'Monedero'}</dd>
+              <dt className="text-ink-500">Origen</dt><dd>{({ TEXT: 'Texto', MANUAL: 'Manual', VOICE: 'Voz', RECEIPT: 'Comprobante' } as const)[transaction.source]}</dd>
+              {transaction.merchant && <><dt className="text-ink-500">Comercio</dt><dd>{transaction.merchant}</dd></>}
+              {transaction.category_confidence != null && <><dt className="text-ink-500">Confianza de categoría</dt><dd>{Math.round(transaction.category_confidence * 100)}%</dd></>}
+            </dl>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                {editingCategory ? (
+                  <label className="block text-sm font-medium text-ink-700">
+                    Categoría
+                    <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 bg-white px-3">
+                      {matchingCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                    </select>
+                  </label>
+                ) : (
+                  <div className="flex min-h-11 items-center justify-between gap-3">
+                    <p className="text-sm"><span className="text-ink-500">Categoría: </span>{transaction.category?.name || 'Sin categoría'}</p>
+                    <button type="button" onClick={() => { setEditingCategory(true); setSuccessMessage(''); }} className="min-h-11 rounded-md px-3 text-sm font-medium text-brand-700 hover:bg-brand-50">Cambiar categoría</button>
+                  </div>
+                )}
+              </div>
+              <div>
+                {editingConcept ? (
+                  <label className="block text-sm font-medium text-ink-700">
+                    Concepto
+                    <input value={concept} maxLength={200} onChange={(event) => setConcept(event.target.value)} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 bg-white px-3" />
+                    <span className="mt-1 block text-right text-xs font-normal text-ink-500">{concept.length}/200</span>
+                  </label>
+                ) : (
+                  <div className="flex min-h-11 items-center justify-between gap-3">
+                    <p className="min-w-0 truncate text-sm"><span className="text-ink-500">Concepto: </span>{transaction.concept || 'Sin concepto'}</p>
+                    <button type="button" onClick={() => { setEditingConcept(true); setSuccessMessage(''); }} className="min-h-11 shrink-0 rounded-md px-3 text-sm font-medium text-brand-700 hover:bg-brand-50">Editar concepto</button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {(editingCategory || editingConcept) && (
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <button type="button" disabled={isSaving} onClick={() => {
+                  setCategoryId(transaction.category?.id ?? '');
+                  setConcept(transaction.concept ?? '');
+                  setEditingCategory(false);
+                  setEditingConcept(false);
+                  setActionError('');
+                }} className="min-h-11 rounded-md border border-ink-300 px-4 text-sm font-medium text-ink-700 disabled:opacity-50">Cancelar</button>
+                <button type="button" disabled={!hasChanges || !concept.trim() || isSaving} onClick={() => void saveChanges()} className="min-h-11 rounded-md bg-brand-600 px-5 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50">
+                  {isSaving ? 'Guardando…' : 'Guardar cambios'}
+                </button>
+              </div>
+            )}
+            {actionError && <p role="alert" className="mt-3 rounded-md border border-danger-300 px-3 py-2 text-sm text-danger-700">{actionError}</p>}
+            {successMessage && <p role="status" className="mt-3 rounded-md bg-green-50 px-3 py-2 text-sm text-success-700">{successMessage}</p>}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export function HistoryPage() {
   const [month, setMonth] = useState(currentMonth);
   const [type, setType] = useState<TypeFilter>('ALL');
@@ -136,6 +301,7 @@ export function HistoryPage() {
   const [dateTo, setDateTo] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<HistoryTransaction | null>(null);
+  const closeDetail = useCallback(() => setSelected(null), []);
 
   const filters: HistoryFilters = useMemo(() => ({
     date_from: dateFrom || dateForMonth(month),
@@ -147,7 +313,7 @@ export function HistoryPage() {
   }), [categoryId, dateFrom, dateTo, month, search, type, walletId]);
   const history = useHistory(filters);
   const walletNames = useMemo(() => new Map(history.wallets.map((wallet) => [wallet.id, wallet.name])), [history.wallets]);
-  const activeFilterCount = Number(Boolean(categoryId)) + Number(Boolean(walletId)) + Number(Boolean(dateFrom || dateTo)) + Number(Boolean(search.trim()));
+  const activeFilterCount = Number(type !== 'ALL') + Number(Boolean(categoryId)) + Number(Boolean(walletId)) + Number(Boolean(dateFrom || dateTo)) + Number(Boolean(search.trim()));
   const groupedTransactions = useMemo(() => {
     const groups = new Map<string, HistoryTransaction[]>();
     for (const transaction of history.transactions) {
@@ -177,7 +343,7 @@ export function HistoryPage() {
 
         <div className="mb-3 flex min-h-8 items-center justify-between gap-2">
           <p aria-live="polite" className="font-medium text-ink-900">{monthLabel(month)}</p>
-          <label className="relative inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-brand-600 hover:bg-white" aria-label="Seleccionar mes">
+          <label className="relative inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-brand-600 hover:bg-white focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-brand-600" aria-label="Seleccionar mes">
             <CalendarDays aria-hidden="true" size={21} />
             <input
               type="month"
@@ -304,22 +470,14 @@ export function HistoryPage() {
       </div>
 
       {selected && (
-        <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}>
-          <section role="dialog" aria-modal="true" aria-labelledby="history-detail-title" className="w-full rounded-t-2xl bg-white p-5 shadow-xl sm:max-w-lg sm:rounded-2xl">
-            <div className="flex items-center justify-between gap-3">
-              <h2 id="history-detail-title" className="text-lg font-semibold text-ink-900">Detalle del movimiento</h2>
-              <button type="button" aria-label="Cerrar detalle" onClick={() => setSelected(null)} className="inline-flex size-11 items-center justify-center rounded-md text-ink-600 hover:bg-bg"><X aria-hidden="true" size={20} /></button>
-            </div>
-            <p className="mt-4 text-2xl font-semibold">{formatSignedMoney(selected)}</p>
-            <p className="mt-1 text-sm text-ink-600">{selected.concept}</p>
-            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-              <dt className="text-ink-500">Fecha</dt><dd>{groupLabel(selected.transaction_date)} · {selected.transaction_date}</dd>
-              <dt className="text-ink-500">Categoría</dt><dd>{selected.category?.name || 'Sin categoría'}</dd>
-              <dt className="text-ink-500">Monedero</dt><dd>{walletNames.get(selected.wallet_id) ?? 'Monedero'}</dd>
-              <dt className="text-ink-500">Origen</dt><dd>{selected.source}</dd>
-            </dl>
-          </section>
-        </div>
+        <HistoryDetailPanel
+          transactionId={selected.id}
+          walletNames={walletNames}
+          categories={history.categories}
+          onClose={closeDetail}
+          onSave={(correction) => history.correct({ id: selected.id, correction })}
+          isSaving={history.isCorrecting}
+        />
       )}
     </main>
   );
