@@ -1,8 +1,9 @@
 import { http, HttpResponse } from 'msw';
 import type { CreateWalletPayload, Wallet } from '../features/wallets/types/wallet.types';
+import type { Budget, BudgetCreatePayload, BudgetPeriodType, BudgetStatus, BudgetThreshold, Currency } from '../features/budgets/types/budget.types';
 
 type TransactionType = 'EXPENSE' | 'INCOME';
-type MockCategory = { id: string; name: string; type: TransactionType; icon: string; source?: string };
+type MockCategory = { id: string; name: string; type: TransactionType; icon: string; source?: string; status?: 'ACTIVE' | 'INACTIVE' };
 type MockTransaction = {
   id: string;
   type: TransactionType;
@@ -25,6 +26,7 @@ const categoryCatalog: MockCategory[] = [
   { id: 'category-sales', name: 'Ventas', type: 'INCOME', icon: 'store' },
   { id: 'category-other-income', name: 'Otros', type: 'INCOME', icon: 'circle-help' },
   { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
+  { id: 'category-friends', name: 'Salidas con amigos', type: 'EXPENSE', icon: 'users' },
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
@@ -46,12 +48,124 @@ const savedWallets: Wallet[] = [
     is_default: false,
   },
 ];
+const MOCK_TODAY = new Date(2026, 9, 31, 12);
+const mockBudgetSeeds = [
+  {
+    id: 'budget-food', categoryId: 'category-food', currency: 'PEN' as const, amount: '500.00', consumed: '410.80', periodType: 'MONTHLY' as const, thresholds: [80],
+  },
+  {
+    id: 'budget-transport', categoryId: 'category-transport', currency: 'PEN' as const, amount: '60.00', consumed: '69.80', periodType: 'MONTHLY' as const, thresholds: [80, 100],
+  },
+  {
+    id: 'budget-friends', categoryId: 'category-friends', currency: 'PEN' as const, amount: '200.00', consumed: '70.00', periodType: 'MONTHLY' as const, thresholds: [90],
+  },
+];
+
+function centsToMoney(cents: bigint): string {
+  const absolute = cents < 0n ? -cents : cents;
+  return `${cents < 0n ? '-' : ''}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, '0')}`;
+}
+
+function dateToString(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getCurrentBudgetPeriod(periodType: BudgetPeriodType, startDate: string | null, periodDays: number | null) {
+  if (periodType === 'WEEKLY') {
+    const start = new Date(MOCK_TODAY);
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return { period_start: dateToString(start), period_end: dateToString(end) };
+  }
+
+  if (periodType === 'MONTHLY') {
+    const start = new Date(MOCK_TODAY.getFullYear(), MOCK_TODAY.getMonth(), 1, 12);
+    const end = new Date(MOCK_TODAY.getFullYear(), MOCK_TODAY.getMonth() + 1, 0, 12);
+    return { period_start: dateToString(start), period_end: dateToString(end) };
+  }
+
+  const days = periodDays ?? 1;
+  const origin = startDate ? new Date(`${startDate}T12:00:00`) : new Date(MOCK_TODAY);
+  if (MOCK_TODAY < origin) {
+    const end = new Date(origin);
+    end.setDate(end.getDate() + days - 1);
+    return { period_start: dateToString(origin), period_end: dateToString(end) };
+  }
+  const elapsedDays = Math.floor((MOCK_TODAY.getTime() - origin.getTime()) / 86_400_000);
+  const start = new Date(origin);
+  start.setDate(start.getDate() + Math.floor(elapsedDays / days) * days);
+  const end = new Date(start);
+  end.setDate(end.getDate() + days - 1);
+  return { period_start: dateToString(start), period_end: dateToString(end) };
+}
+
+function makeBudget(input: {
+  id: string;
+  categoryId: string;
+  currency: Currency;
+  amount: string;
+  consumed: string;
+  periodType: BudgetPeriodType;
+  startDate?: string | null;
+  periodDays?: number | null;
+  status?: BudgetStatus;
+  thresholds: BudgetThreshold[];
+}): Budget {
+  const category = categoryCatalog.find((item) => item.id === input.categoryId);
+  const amountCents = amountToCents(input.amount);
+  const consumedCents = amountToCents(input.consumed);
+  const percentage = amountCents === 0n ? 0 : Number((consumedCents * 1_000n) / amountCents) / 10;
+  const period = getCurrentBudgetPeriod(input.periodType, input.startDate ?? null, input.periodDays ?? null);
+
+  return {
+    id: input.id,
+    category: { id: input.categoryId, name: category?.name ?? 'Categoría', type: 'EXPENSE', icon: category?.icon ?? 'circle-help' },
+    currency: input.currency,
+    amount: input.amount,
+    period_type: input.periodType,
+    start_date: input.periodType === 'CUSTOM' ? input.startDate ?? null : null,
+    period_days: input.periodType === 'CUSTOM' ? input.periodDays ?? null : null,
+    period_start: period.period_start,
+    period_end: period.period_end,
+    consumed: input.consumed,
+    remaining: centsToMoney(amountCents - consumedCents),
+    percentage,
+    status: input.status ?? 'ACTIVE',
+    thresholds: input.thresholds,
+  };
+}
+
+function createSeedBudgets(): Budget[] {
+  return mockBudgetSeeds.map((seed) => makeBudget({
+    id: seed.id,
+    categoryId: seed.categoryId,
+    currency: seed.currency,
+    amount: seed.amount,
+    consumed: seed.consumed,
+    periodType: seed.periodType,
+    thresholds: seed.thresholds.map((percentage) => ({
+      id: `${seed.id}-threshold-${percentage}`,
+      percentage,
+      triggered: amountToCents(seed.consumed) * 100n >= amountToCents(seed.amount) * BigInt(percentage),
+    })),
+  }));
+}
+
+let savedBudgets = createSeedBudgets();
 const today = () => new Date().toISOString().slice(0, 10);
 const hasSession = (request: Request) => request.headers.get('Authorization')?.startsWith('Bearer ') ?? false;
 
+export function resetBudgetMocks() {
+  savedBudgets = createSeedBudgets();
+}
+
 function sessionExpired() {
   return HttpResponse.json(
-    { error: { code: 'SESSION_EXPIRED', message: 'Inicia sesión para administrar tus monederos.' } },
+    { error: { code: 'SESSION_EXPIRED', message: 'Inicia sesión para continuar.' } },
     { status: 401 },
   );
 }
@@ -64,6 +178,24 @@ function hasDuplicateWalletName(name: string, excludeId?: string): boolean {
 function amountToCents(amount: string): bigint {
   const [whole = '0', fraction = '00'] = amount.split('.');
   return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+}
+
+function isValidBudgetAmount(value: string): boolean {
+  if (!/^\d{1,8}(?:\.\d{1,2})?$/u.test(value)) return false;
+  const cents = amountToCents(value);
+  return cents > 0n && cents <= 9_999_999_999n;
+}
+
+function findBudget(id: string): Budget | undefined {
+  return savedBudgets.find((budget) => budget.id === id);
+}
+
+function hasActiveBudgetForCategory(categoryId: string, exceptId?: string): boolean {
+  return savedBudgets.some((budget) => budget.id !== exceptId && budget.category.id === categoryId && budget.status === 'ACTIVE');
+}
+
+function toThresholds(budget: Budget): BudgetThreshold[] {
+  return budget.thresholds.map((threshold) => ({ ...threshold }));
 }
 
 function findSuggestedCategory(type: TransactionType, concept: string): MockCategory {
@@ -79,6 +211,200 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
   http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog.map((category) => ({ ...category, status: 'ACTIVE' })))),
+  http.get('*/api/v1/budgets', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const url = new URL(request.url);
+    const status = url.searchParams.get('status') ?? 'ACTIVE';
+    if (status !== 'ACTIVE' && status !== 'INACTIVE') {
+      return HttpResponse.json({ error: { code: 'INVALID_STATUS', message: 'Selecciona un estado válido.' } }, { status: 422 });
+    }
+    const categoryId = url.searchParams.get('category_id');
+    const data = savedBudgets
+      .filter((budget) => budget.status === status && (!categoryId || budget.category.id === categoryId))
+      .map((budget) => ({ ...budget, category: { ...budget.category }, thresholds: toThresholds(budget) }));
+    return HttpResponse.json({ data });
+  }),
+  http.post('*/api/v1/budgets', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    if (!request.headers.get('Idempotency-Key')) {
+      return HttpResponse.json({ error: { code: 'IDEMPOTENCY_KEY_REQUIRED', message: 'Falta la clave de idempotencia.' } }, { status: 400 });
+    }
+    const body = await request.json() as Partial<BudgetCreatePayload>;
+    const categoryId = typeof body.category_id === 'string' ? body.category_id : '';
+    const category = categoryCatalog.find((item) => item.id === categoryId);
+    if (!category) {
+      return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'Selecciona una categoría válida.' } }, { status: 422 });
+    }
+    if (category.type !== 'EXPENSE') {
+      return HttpResponse.json({ error: { code: 'INVALID_CATEGORY_TYPE', message: 'El presupuesto solo aplica a gastos.' } }, { status: 422 });
+    }
+    if (hasActiveBudgetForCategory(categoryId)) {
+      return HttpResponse.json({ error: { code: 'BUDGET_EXISTS', message: 'Ya tienes un presupuesto para esta categoría.' } }, { status: 409 });
+    }
+    if (body.currency !== 'PEN' && body.currency !== 'USD') {
+      return HttpResponse.json({ error: { code: 'INVALID_CURRENCY', message: 'Usa PEN o USD.' } }, { status: 422 });
+    }
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto entre 0.01 y 99,999,999.99.' } }, { status: 422 });
+    }
+    if (body.period_type !== 'WEEKLY' && body.period_type !== 'MONTHLY' && body.period_type !== 'CUSTOM') {
+      return HttpResponse.json({ error: { code: 'INVALID_PERIOD', message: 'Selecciona un periodo válido.' } }, { status: 422 });
+    }
+    if (body.period_type === 'CUSTOM' && (typeof body.start_date !== 'string' || !body.start_date || body.period_days === null || body.period_days === undefined)) {
+      return HttpResponse.json({ error: { code: 'CUSTOM_PERIOD_REQUIRED', message: 'Indica fecha de inicio y días.' } }, { status: 422 });
+    }
+    if (body.period_type === 'CUSTOM' && (!Number.isInteger(body.period_days) || Number(body.period_days) < 1 || Number(body.period_days) > 366)) {
+      return HttpResponse.json({ error: { code: 'INVALID_PERIOD_DAYS', message: 'Los días deben estar entre 1 y 366.' } }, { status: 422 });
+    }
+    const requestedThresholds = body.thresholds ?? [80];
+    if (!Array.isArray(requestedThresholds) || requestedThresholds.length === 0
+      || requestedThresholds.some((value) => !Number.isInteger(value) || value < 1 || value > 100)
+      || new Set(requestedThresholds).size !== requestedThresholds.length) {
+      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'Ingresa porcentajes únicos entre 1% y 100%.' } }, { status: 422 });
+    }
+
+    const id = crypto.randomUUID();
+    const budget = makeBudget({
+      id,
+      categoryId,
+      currency: body.currency,
+      amount: body.amount,
+      consumed: '0.00',
+      periodType: body.period_type,
+      startDate: body.start_date ?? null,
+      periodDays: body.period_days ?? null,
+      thresholds: requestedThresholds.map((percentage) => ({
+        id: crypto.randomUUID(),
+        percentage,
+        triggered: false,
+      })),
+    });
+    savedBudgets.push(budget);
+    return HttpResponse.json(budget, { status: 201 });
+  }),
+  http.get('*/api/v1/budgets/:budgetId/thresholds', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    return HttpResponse.json({ data: toThresholds(budget) });
+  }),
+  http.put('*/api/v1/budgets/:budgetId/thresholds', async ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    const body = await request.json() as { thresholds?: unknown };
+    const values = body.thresholds;
+    if (!Array.isArray(values) || values.length === 0
+      || values.some((value) => typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 100)
+      || new Set(values).size !== values.length) {
+      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'Ingresa porcentajes únicos entre 1% y 100%.' } }, { status: 422 });
+    }
+    budget.thresholds = values.map((percentage) => ({
+      id: budget.thresholds.find((threshold) => threshold.percentage === percentage)?.id ?? crypto.randomUUID(),
+      percentage,
+      triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
+    }));
+    return HttpResponse.json({ data: toThresholds(budget) });
+  }),
+  http.post('*/api/v1/budgets/:budgetId/thresholds', async ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    const body = await request.json() as { percentage?: unknown };
+    const percentage = body.percentage;
+    if (typeof percentage !== 'number' || !Number.isInteger(percentage) || percentage < 1 || percentage > 100) {
+      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'Ingresa un porcentaje entre 1% y 100%.' } }, { status: 422 });
+    }
+    if (budget.thresholds.some((threshold) => threshold.percentage === percentage)) {
+      return HttpResponse.json({ error: { code: 'THRESHOLD_EXISTS', message: 'Ya tienes un umbral con ese porcentaje.' } }, { status: 409 });
+    }
+    const threshold: BudgetThreshold = {
+      id: crypto.randomUUID(),
+      percentage,
+      triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
+    };
+    budget.thresholds.push(threshold);
+    return HttpResponse.json(threshold, { status: 201 });
+  }),
+  http.delete('*/api/v1/budgets/:budgetId/thresholds/:thresholdId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    const nextThresholds = budget.thresholds.filter((threshold) => threshold.id !== String(params.thresholdId));
+    if (nextThresholds.length === budget.thresholds.length) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este umbral.' } }, { status: 404 });
+    }
+    if (nextThresholds.length === 0) {
+      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'El presupuesto debe conservar al menos un umbral.' } }, { status: 422 });
+    }
+    budget.thresholds = nextThresholds;
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.get('*/api/v1/budgets/:budgetId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    return HttpResponse.json({ ...budget, category: { ...budget.category }, thresholds: toThresholds(budget) });
+  }),
+  http.patch('*/api/v1/budgets/:budgetId', async ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    const body = await request.json() as Partial<BudgetCreatePayload> & { status?: BudgetStatus };
+    if (body.category_id !== undefined || body.currency !== undefined) {
+      return HttpResponse.json({ error: { code: 'VALIDATION_ERROR', message: 'La categoría y moneda no se pueden cambiar.' } }, { status: 422 });
+    }
+    if (body.status === 'INACTIVE') {
+      budget.status = 'INACTIVE';
+      return HttpResponse.json(budget);
+    }
+    let nextStatus = budget.status;
+    if (body.status === 'ACTIVE') {
+      const category = categoryCatalog.find((item) => item.id === budget.category.id);
+      if (!category || category.status === 'INACTIVE') {
+        return HttpResponse.json({ error: { code: 'CATEGORY_INACTIVE', message: 'La categoría está inactiva.' } }, { status: 409 });
+      }
+      if (hasActiveBudgetForCategory(budget.category.id, budget.id)) {
+        return HttpResponse.json({ error: { code: 'BUDGET_EXISTS', message: 'Ya tienes un presupuesto para esta categoría.' } }, { status: 409 });
+      }
+      nextStatus = 'ACTIVE';
+    }
+    if (body.amount !== undefined && (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount))) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto entre 0.01 y 99,999,999.99.' } }, { status: 422 });
+    }
+    const periodType = body.period_type ?? budget.period_type;
+    if (periodType !== 'WEEKLY' && periodType !== 'MONTHLY' && periodType !== 'CUSTOM') {
+      return HttpResponse.json({ error: { code: 'INVALID_PERIOD', message: 'Selecciona un periodo válido.' } }, { status: 422 });
+    }
+    const startDate = periodType === 'CUSTOM' ? body.start_date ?? budget.start_date : null;
+    const periodDays = periodType === 'CUSTOM' ? body.period_days ?? budget.period_days : null;
+    if (periodType === 'CUSTOM' && (!startDate || !periodDays)) {
+      return HttpResponse.json({ error: { code: 'CUSTOM_PERIOD_REQUIRED', message: 'Indica fecha de inicio y días.' } }, { status: 422 });
+    }
+    if (periodType === 'CUSTOM' && (!Number.isInteger(periodDays) || Number(periodDays) < 1 || Number(periodDays) > 366)) {
+      return HttpResponse.json({ error: { code: 'INVALID_PERIOD_DAYS', message: 'Los días deben estar entre 1 y 366.' } }, { status: 422 });
+    }
+    Object.assign(budget, makeBudget({
+      id: budget.id,
+      categoryId: budget.category.id,
+      currency: budget.currency,
+      amount: body.amount ?? budget.amount,
+      consumed: budget.consumed,
+      periodType,
+      startDate,
+      periodDays,
+      status: nextStatus,
+      thresholds: budget.thresholds,
+    }));
+    return HttpResponse.json(budget);
+  }),
+  http.delete('*/api/v1/budgets/:budgetId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const budget = findBudget(String(params.budgetId));
+    if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
+    budget.status = 'INACTIVE';
+    return new HttpResponse(null, { status: 204 });
+  }),
   http.get('*/api/v1/wallets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     return HttpResponse.json({ data: savedWallets });

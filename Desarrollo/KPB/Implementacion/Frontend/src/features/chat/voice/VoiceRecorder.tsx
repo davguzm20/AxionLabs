@@ -27,7 +27,7 @@ async function getDuration(file: File): Promise<number> {
 }
 
 async function validateAudioFile(file: File): Promise<string | null> {
-  const mimeType = file.type.split(';')[0];
+  const mimeType = file.type.split(';')[0] ?? '';
   if (!SUPPORTED_AUDIO_TYPES.has(mimeType)) {
     return 'Usa un audio webm, ogg, mp4, mpeg o wav.';
   }

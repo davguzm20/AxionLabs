@@ -1,14 +1,6 @@
-export class ApiError extends Error {
-  status: number;
-  code?: string;
+import { ApiError } from './errors';
 
-  constructor(message: string, status: number, code?: string) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.code = code;
-  }
-}
+export { ApiError } from './errors';
 
 const apiBaseUrl = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
 
@@ -30,7 +22,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) return undefined as T;
 
   const payload = await response.json().catch(() => undefined) as {
-    error?: { message?: string; code?: string };
+    error?: { message?: string; code?: string; details?: { field: string; message: string }[] };
     message?: string;
   } | undefined;
 
@@ -39,6 +31,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       payload?.error?.message || payload?.message || 'No se pudo completar la solicitud. Inténtalo nuevamente.',
       response.status,
       payload?.error?.code,
+      payload?.error?.details,
     );
   }
 

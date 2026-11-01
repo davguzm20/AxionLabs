@@ -73,6 +73,7 @@ export function TransactionPreviewCard({
       setDraft((current) => {
         if (current.wallet_id || walletItems.length === 0) return current;
         const defaultWallet = walletItems.find((wallet) => wallet.is_default) ?? walletItems[0];
+        if (!defaultWallet) return current;
         return { ...current, wallet_id: defaultWallet.id };
       });
     }).catch(() => {
