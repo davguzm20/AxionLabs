@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { CreateWalletPayload, Wallet } from '../features/wallets/types/wallet.types';
+import type { Wallet } from '../features/wallets/types/wallet.types';
 import type { Budget, BudgetCreatePayload, BudgetPeriodType, BudgetStatus, BudgetThreshold, Currency } from '../features/budgets/types/budget.types';
 
 type TransactionType = 'EXPENSE' | 'INCOME';
@@ -13,11 +13,28 @@ type MockTransaction = {
   transaction_date: string;
   wallet_id: string;
   category: MockCategory;
-  source: 'TEXT' | 'MANUAL';
+  source: 'TEXT' | 'MANUAL' | 'VOICE' | 'RECEIPT';
+  needs_review?: boolean;
+  created_at?: string;
+};
+type MockNotification = {
+  id: string;
+  type: 'BUDGET_ALERT';
+  title: string;
+  body: string;
+  status: 'UNREAD' | 'READ';
+  alert_id: string | null;
+  created_at: string;
+  read_at: string | null;
+};
+type NotificationEvent = {
+  event: 'alert.created' | 'notification.read';
+  id: string;
+  data: Record<string, unknown>;
 };
 
 const categoryCatalog: MockCategory[] = [
-  { id: 'category-food', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
+  { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
   { id: 'category-transport', name: 'Transporte', type: 'EXPENSE', icon: 'bus' },
   { id: 'category-health', name: 'Salud', type: 'EXPENSE', icon: 'heart-pulse' },
   { id: 'category-other', name: 'Otros', type: 'EXPENSE', icon: 'circle-help' },
@@ -25,12 +42,15 @@ const categoryCatalog: MockCategory[] = [
   { id: 'category-freelance', name: 'Freelance', type: 'INCOME', icon: 'laptop' },
   { id: 'category-sales', name: 'Ventas', type: 'INCOME', icon: 'store' },
   { id: 'category-other-income', name: 'Otros', type: 'INCOME', icon: 'circle-help' },
-  { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
   { id: 'category-friends', name: 'Salidas con amigos', type: 'EXPENSE', icon: 'users' },
+  { id: 'category-subscriptions', name: 'Suscripciones', type: 'EXPENSE', icon: 'tv' },
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
-const savedWallets: Wallet[] = [
+let savedNotifications: MockNotification[] = [];
+let savedPreferences = { main_currency: 'PEN' as const, email_notifications: true };
+const notificationSubscribers = new Set<(event: NotificationEvent) => void>();
+const mockWalletSeeds: Wallet[] = [
   {
     id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
     name: 'BCP',
@@ -48,10 +68,11 @@ const savedWallets: Wallet[] = [
     is_default: false,
   },
 ];
-const MOCK_TODAY = new Date(2026, 9, 31, 12);
+const savedWallets: Wallet[] = mockWalletSeeds.map((wallet) => ({ ...wallet }));
+const MOCK_TODAY = new Date();
 const mockBudgetSeeds = [
   {
-    id: 'budget-food', categoryId: 'category-food', currency: 'PEN' as const, amount: '500.00', consumed: '410.80', periodType: 'MONTHLY' as const, thresholds: [80],
+    id: 'budget-food', categoryId: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', currency: 'PEN' as const, amount: '500.00', consumed: '410.80', periodType: 'MONTHLY' as const, thresholds: [80],
   },
   {
     id: 'budget-transport', categoryId: 'category-transport', currency: 'PEN' as const, amount: '60.00', consumed: '69.80', periodType: 'MONTHLY' as const, thresholds: [80, 100],
@@ -159,8 +180,71 @@ let savedBudgets = createSeedBudgets();
 const today = () => new Date().toISOString().slice(0, 10);
 const hasSession = (request: Request) => request.headers.get('Authorization')?.startsWith('Bearer ') ?? false;
 
+function shiftDate(value: Date, days: number): string {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return dateToString(date);
+}
+
+function createSeedTransactions(): MockTransaction[] {
+  const now = new Date();
+  const todayDate = dateToString(now);
+  const yesterday = now.getDate() === 1 ? todayDate : shiftDate(now, -1);
+  const createdAt = (date: string, time: string) => `${date}T${time}:00-05:00`;
+  const seed = (
+    id: string,
+    type: TransactionType,
+    amount: string,
+    concept: string,
+    transactionDate: string,
+    walletId: string,
+    categoryId: string,
+    time: string,
+  ): MockTransaction => ({
+    id,
+    type,
+    amount,
+    currency: 'PEN',
+    concept,
+    transaction_date: transactionDate,
+    wallet_id: walletId,
+    category: { ...categoryCatalog.find(({ id: categoryKey }) => categoryKey === categoryId)! },
+    source: 'MANUAL',
+    needs_review: false,
+    created_at: createdAt(transactionDate, time),
+  });
+
+  return [
+    seed('history-dinner', 'EXPENSE', '120.00', 'Cena', todayDate, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', '19:30'),
+    seed('history-uber', 'EXPENSE', '18.50', 'Uber', todayDate, 'wallet-cash-default', 'category-transport', '18:10'),
+    seed('history-salary', 'INCOME', '2500.00', 'Sueldo', yesterday, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'category-salary', '09:00'),
+    seed('history-market', 'EXPENSE', '86.30', 'Supermercado', yesterday, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', '08:30'),
+    seed('history-netflix', 'EXPENSE', '34.90', 'Netflix', yesterday, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'category-subscriptions', '07:15'),
+  ];
+}
+
+function resetSavedTransactions() {
+  savedTransactions.clear();
+  for (const transaction of createSeedTransactions()) savedTransactions.set(transaction.id, transaction);
+}
+
+resetSavedTransactions();
+
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
+  resetSavedTransactions();
+  savedWallets.splice(0, savedWallets.length, ...mockWalletSeeds.map((wallet) => ({ ...wallet })));
+  savedNotifications = [];
+  savedPreferences = { main_currency: 'PEN', email_notifications: true };
+}
+
+export function resetNotificationMocks() {
+  savedNotifications = [];
+  savedPreferences = { main_currency: 'PEN', email_notifications: true };
+}
+
+function publishNotificationEvent(event: NotificationEvent) {
+  for (const subscriber of notificationSubscribers) subscriber(event);
 }
 
 function sessionExpired() {
@@ -175,9 +259,29 @@ function hasDuplicateWalletName(name: string, excludeId?: string): boolean {
   return savedWallets.some((wallet) => wallet.id !== excludeId && wallet.name.trim().toLocaleLowerCase('es-PE') === normalizedName);
 }
 
+function walletResponse(wallet: Wallet) {
+  const transactionCount = [...savedTransactions.values()].filter((transaction) => transaction.wallet_id === wallet.id).length;
+  return {
+    ...wallet,
+    type: wallet.type === 'bank' ? 'BANK' : 'CASH',
+    current_balance: wallet.balance,
+    // Keep this alias for older local consumers while the API contract moves to current_balance.
+    balance: wallet.balance,
+    status: wallet.status ?? 'ACTIVE',
+    has_transactions: transactionCount > 0,
+    transaction_count: transactionCount,
+  };
+}
+
 function amountToCents(amount: string): bigint {
   const [whole = '0', fraction = '00'] = amount.split('.');
   return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+}
+
+function updateWalletBalance(wallet: Wallet, type: TransactionType, amount: string) {
+  const transactionCents = amountToCents(amount);
+  const signedCents = type === 'INCOME' ? transactionCents : -transactionCents;
+  wallet.balance = centsToMoney(amountToCents(wallet.balance) + signedCents);
 }
 
 function isValidBudgetAmount(value: string): boolean {
@@ -198,11 +302,108 @@ function toThresholds(budget: Budget): BudgetThreshold[] {
   return budget.thresholds.map((threshold) => ({ ...threshold }));
 }
 
+function formatMockMoney(cents: bigint, currency: string): string {
+  return `${currency === 'PEN' ? 'S/' : '$'} ${centsToMoney(cents)}`;
+}
+
+function evaluateMockBudgetAlerts(input: {
+  categoryId: string;
+  currency: string;
+  amountCents: bigint;
+  transactionDate: string;
+}): Array<{
+  id: string;
+  title: string;
+  priority: 'high' | 'normal';
+  threshold_percentage: number;
+  usage_percentage: number;
+  message: string;
+}> {
+  const alerts: Array<{
+    id: string;
+    title: string;
+    priority: 'high' | 'normal';
+    threshold_percentage: number;
+    usage_percentage: number;
+    message: string;
+  }> = [];
+
+  for (const budget of savedBudgets) {
+    if (budget.status !== 'ACTIVE' || budget.category.id !== input.categoryId || budget.currency !== input.currency) continue;
+    if (input.transactionDate < budget.period_start || input.transactionDate > budget.period_end) continue;
+
+    const amountCents = amountToCents(budget.amount);
+    const consumedCents = amountToCents(budget.consumed) + input.amountCents;
+    budget.consumed = centsToMoney(consumedCents);
+    budget.remaining = centsToMoney(amountCents - consumedCents);
+    budget.percentage = amountCents === 0n ? 0 : Number((consumedCents * 1_000n) / amountCents) / 10;
+
+    const crossed = budget.thresholds
+      .filter((threshold) => !threshold.triggered
+        && consumedCents * 100n >= amountCents * BigInt(threshold.percentage))
+      .sort((left, right) => left.percentage - right.percentage);
+
+    for (const threshold of crossed) {
+      threshold.triggered = true;
+      const remainingCents = amountCents - consumedCents;
+      const overspentCents = remainingCents < 0n ? -remainingCents : 0n;
+      const title = threshold.percentage === 100 && remainingCents >= 0n
+        ? `Alcanzaste el 100% de tu presupuesto de ${budget.category.name}.`
+        : `Cruzaste el ${threshold.percentage}% de tu presupuesto de ${budget.category.name}.`;
+      const body = remainingCents < 0n
+        ? `Superaste tu presupuesto en ${formatMockMoney(overspentCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
+        : threshold.percentage === 100
+          ? `Límite: ${formatMockMoney(amountCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
+          : `Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}. Te quedan ${formatMockMoney(remainingCents, budget.currency)}.`;
+      const alertId = crypto.randomUUID();
+      const notification: MockNotification = {
+        id: crypto.randomUUID(),
+        type: 'BUDGET_ALERT',
+        title,
+        body,
+        status: 'UNREAD',
+        alert_id: alertId,
+        created_at: new Date().toISOString(),
+        read_at: null,
+      };
+      savedNotifications.unshift(notification);
+      const priority = threshold.percentage === 100 ? 'high' : 'normal';
+      const usagePercentage = Number((consumedCents * 1_000n) / amountCents) / 10;
+      alerts.push({
+        id: alertId,
+        title,
+        priority,
+        threshold_percentage: threshold.percentage,
+        usage_percentage: usagePercentage,
+        message: `${title} ${body}`,
+      });
+      publishNotificationEvent({
+        event: 'alert.created',
+        id: alertId,
+        data: {
+          id: alertId,
+          budget_id: budget.id,
+          notification_id: notification.id,
+          category: budget.category.name,
+          percentage: threshold.percentage,
+          consumed: centsToMoney(consumedCents),
+          limit: budget.amount,
+          remaining: centsToMoney(remainingCents),
+          priority: priority === 'high' ? 'HIGH' : 'NORMAL',
+          created_at: notification.created_at,
+        },
+      });
+    }
+  }
+
+  return alerts;
+}
+
 function findSuggestedCategory(type: TransactionType, concept: string): MockCategory {
   const normalized = concept.toLocaleLowerCase('es-PE');
   const patterns = type === 'INCOME'
     ? [[/sueldo|salario|planilla/, 'category-salary'], [/freelance|servicio/, 'category-freelance'], [/venta|vend[ií]/, 'category-sales']]
-    : [[/caf[eé]|almuerzo|cena|comida|men[uú]|restaurante/, 'category-food'], [/taxi|bus|pasaje|metro|transporte/, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
+    : [[/caf[eé]|almuerzo|cena|comida|men[uú]|restaurante/, 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'], [/taxi|bus|pasaje|metro|transporte/, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
   const matchedId = patterns.find(([pattern]) => (pattern as RegExp).test(normalized))?.[1] as string | undefined;
   const fallbackId = type === 'INCOME' ? 'category-other-income' : 'category-other';
   return categoryCatalog.find(({ id }) => id === (matchedId ?? fallbackId)) ?? categoryCatalog[0]!;
@@ -211,6 +412,181 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
   http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog.map((category) => ({ ...category, status: 'ACTIVE' })))),
+  http.get('*/transactions/summary', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const query = new URL(request.url).searchParams;
+    const filtered = [...savedTransactions.values()].filter((transaction) => {
+      if (query.get('date_from') && transaction.transaction_date < query.get('date_from')!) return false;
+      if (query.get('date_to') && transaction.transaction_date > query.get('date_to')!) return false;
+      if (query.get('type') && transaction.type !== query.get('type')) return false;
+      if (query.get('category_id') && transaction.category.id !== query.get('category_id')) return false;
+      if (query.get('wallet_id') && transaction.wallet_id !== query.get('wallet_id')) return false;
+      const search = query.get('q')?.trim().toLocaleLowerCase('es-PE');
+      if (search && !transaction.concept.toLocaleLowerCase('es-PE').includes(search)) return false;
+      return true;
+    });
+    const totals = new Map<string, { income: bigint; expense: bigint }>();
+    for (const transaction of filtered) {
+      const total = totals.get(transaction.currency) ?? { income: 0n, expense: 0n };
+      if (transaction.type === 'INCOME') total.income += amountToCents(transaction.amount);
+      else total.expense += amountToCents(transaction.amount);
+      totals.set(transaction.currency, total);
+    }
+    return HttpResponse.json({
+      date_from: query.get('date_from'),
+      date_to: query.get('date_to'),
+      count: filtered.length,
+      by_currency: [...totals.entries()].map(([currency, total]) => ({
+        currency,
+        income: centsToMoney(total.income),
+        expense: centsToMoney(total.expense),
+        net: centsToMoney(total.income - total.expense),
+      })),
+    });
+  }),
+  http.get('*/transactions', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const query = new URL(request.url).searchParams;
+    const filtered = [...savedTransactions.values()].filter((transaction) => {
+      if (query.get('date_from') && transaction.transaction_date < query.get('date_from')!) return false;
+      if (query.get('date_to') && transaction.transaction_date > query.get('date_to')!) return false;
+      if (query.get('type') && transaction.type !== query.get('type')) return false;
+      if (query.get('category_id') && transaction.category.id !== query.get('category_id')) return false;
+      if (query.get('wallet_id') && transaction.wallet_id !== query.get('wallet_id')) return false;
+      const search = query.get('q')?.trim().toLocaleLowerCase('es-PE');
+      if (search && !transaction.concept.toLocaleLowerCase('es-PE').includes(search)) return false;
+      return true;
+    }).sort((first, second) => {
+      const dateOrder = second.transaction_date.localeCompare(first.transaction_date);
+      return dateOrder || (second.created_at ?? '').localeCompare(first.created_at ?? '');
+    });
+    const pageSize = Math.min(100, Math.max(1, Number(query.get('page_size')) || 20));
+    const page = Math.max(1, Number(query.get('page')) || 1);
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({
+      data: filtered.slice(start, start + pageSize),
+      meta: { page, page_size: pageSize, total: filtered.length, pages: Math.ceil(filtered.length / pageSize) },
+    });
+  }),
+  http.get('*/transactions/:id', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const transaction = savedTransactions.get(String(params.id));
+    return transaction
+      ? HttpResponse.json(transaction)
+      : HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró la transacción.' } }, { status: 404 });
+  }),
+  http.get('*/api/v1/users/me/preferences', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    return HttpResponse.json({ ...savedPreferences });
+  }),
+  http.patch('*/api/v1/users/me/preferences', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const body = await request.json() as { email_notifications?: unknown };
+    if (typeof body.email_notifications !== 'boolean') {
+      return HttpResponse.json({ error: { code: 'VALIDATION_ERROR', message: 'La preferencia de correo debe ser verdadera o falsa.' } }, { status: 422 });
+    }
+    savedPreferences = { ...savedPreferences, email_notifications: body.email_notifications };
+    return HttpResponse.json({ ...savedPreferences });
+  }),
+  http.get('*/api/v1/notifications/stream', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const encoder = new TextEncoder();
+    let cleanup = () => {};
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        let closed = false;
+        const send = (event: NotificationEvent) => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`event: ${event.event}\nid: ${event.id}\ndata: ${JSON.stringify(event.data)}\n\n`));
+          } catch {
+            close();
+          }
+        };
+        const heartbeat = setInterval(() => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(': ping\n\n'));
+          } catch {
+            close();
+          }
+        }, 25_000);
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(heartbeat);
+          notificationSubscribers.delete(send);
+          request.signal.removeEventListener('abort', close);
+        };
+        cleanup = close;
+        notificationSubscribers.add(send);
+        controller.enqueue(encoder.encode('retry: 3000\n\n'));
+        request.signal.addEventListener('abort', close, { once: true });
+      },
+      cancel() {
+        cleanup();
+      },
+    });
+    return new HttpResponse(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  }),
+  http.get('*/api/v1/notifications', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const url = new URL(request.url);
+    const status = url.searchParams.get('status');
+    if (status && status !== 'UNREAD' && status !== 'READ') {
+      return HttpResponse.json({ error: { code: 'INVALID_STATUS', message: 'Selecciona un filtro válido.' } }, { status: 422 });
+    }
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1);
+    const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('page_size') ?? 20) || 20));
+    const sorted = savedNotifications
+      .filter((notification) => !status || notification.status === status)
+      .sort((left, right) => {
+        if (left.status !== right.status) return left.status === 'UNREAD' ? -1 : 1;
+        return right.created_at.localeCompare(left.created_at);
+      });
+    const offset = (page - 1) * pageSize;
+    const data = sorted.slice(offset, offset + pageSize).map((notification) => ({ ...notification }));
+    return HttpResponse.json({
+      data,
+      meta: { page, page_size: pageSize, total: sorted.length, pages: Math.ceil(sorted.length / pageSize) },
+    });
+  }),
+  http.patch('*/api/v1/notifications/read-all', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const readAt = new Date().toISOString();
+    for (const notification of savedNotifications) {
+      if (notification.status !== 'UNREAD') continue;
+      notification.status = 'READ';
+      notification.read_at = readAt;
+      publishNotificationEvent({
+        event: 'notification.read',
+        id: notification.id,
+        data: { id: notification.id, status: 'READ' },
+      });
+    }
+    return HttpResponse.json({ message: 'Notificaciones marcadas como leídas.' });
+  }),
+  http.patch('*/api/v1/notifications/:notificationId/read', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const notification = savedNotifications.find((item) => item.id === String(params.notificationId));
+    if (!notification) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos esta notificación.' } }, { status: 404 });
+    if (notification.status === 'UNREAD') {
+      notification.status = 'READ';
+      notification.read_at = new Date().toISOString();
+      publishNotificationEvent({
+        event: 'notification.read',
+        id: notification.id,
+        data: { id: notification.id, status: 'READ' },
+      });
+    }
+    return HttpResponse.json({ ...notification });
+  }),
   http.get('*/api/v1/budgets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     const url = new URL(request.url);
@@ -407,11 +783,20 @@ export const handlers = [
   }),
   http.get('*/api/v1/wallets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
-    return HttpResponse.json({ data: savedWallets });
+    const status = new URL(request.url).searchParams.get('status');
+    const wallets = status ? savedWallets.filter((wallet) => (wallet.status ?? 'ACTIVE') === status) : savedWallets;
+    return HttpResponse.json({ data: wallets.map(walletResponse) });
+  }),
+  http.get('*/api/v1/wallets/:walletId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const wallet = savedWallets.find((item) => item.id === String(params.walletId));
+    return wallet
+      ? HttpResponse.json(walletResponse(wallet))
+      : HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
   }),
   http.post('*/api/v1/wallets', async ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
-    const body = await request.json() as Partial<CreateWalletPayload>;
+    const body = await request.json() as { name?: string; type?: string; currency?: string; initial_balance?: string };
     const name = body.name?.trim() ?? '';
     if (!name) {
       return HttpResponse.json(
@@ -419,13 +804,14 @@ export const handlers = [
         { status: 422 },
       );
     }
-    if (name.length > 40) {
+    if (name.length > 50) {
       return HttpResponse.json(
-        { error: { code: 'WALLET_NAME_TOO_LONG', message: 'El nombre debe tener 40 caracteres o menos.' } },
+        { error: { code: 'WALLET_NAME_TOO_LONG', message: 'El nombre debe tener 50 caracteres o menos.' } },
         { status: 422 },
       );
     }
-    if ((body.type !== 'bank' && body.type !== 'cash') || body.currency !== 'PEN') {
+    const type = body.type === 'BANK' || body.type === 'bank' ? 'bank' : body.type === 'CASH' || body.type === 'cash' ? 'cash' : null;
+    if (!type || (body.currency !== 'PEN' && body.currency !== 'USD')) {
       return HttpResponse.json(
         { error: { code: 'INVALID_WALLET_DATA', message: 'Selecciona un tipo de monedero y una moneda disponibles.' } },
         { status: 422 },
@@ -451,17 +837,67 @@ export const handlers = [
     const wallet: Wallet = {
       id: crypto.randomUUID(),
       name,
-      type: body.type,
+      type,
       currency: body.currency,
       initial_balance: initialBalance,
       balance: initialBalance,
-      is_default: savedWallets.length === 0,
+      is_default: !savedWallets.some((item) => item.status !== 'INACTIVE'),
+      status: 'ACTIVE',
     };
     savedWallets.push(wallet);
     return HttpResponse.json({
-      wallet,
-      confirmation_message: `Monedero “${wallet.name}” creado con saldo inicial de S/ ${wallet.initial_balance}.`,
+      wallet: walletResponse(wallet),
+      confirmation_message: `Monedero “${wallet.name}” creado con saldo inicial de ${wallet.currency === 'PEN' ? 'S/' : '$'} ${wallet.initial_balance}.`,
     }, { status: 201 });
+  }),
+  http.patch('*/api/v1/wallets/:walletId', async ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const wallet = savedWallets.find((item) => item.id === String(params.walletId));
+    if (!wallet) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
+    const body = await request.json() as { name?: string; type?: string; currency?: string; status?: string };
+    const name = body.name?.trim();
+    const nextType = body.type === undefined ? wallet.type : body.type === 'BANK' || body.type === 'bank' ? 'bank' : body.type === 'CASH' || body.type === 'cash' ? 'cash' : null;
+    if (name !== undefined && (!name || name.length > 50)) {
+      return HttpResponse.json({ error: { code: 'INVALID_WALLET_NAME', message: 'El nombre debe tener entre 1 y 50 caracteres.' } }, { status: 422 });
+    }
+    if (name && hasDuplicateWalletName(name, wallet.id)) {
+      return HttpResponse.json({ error: { code: 'WALLET_NAME_EXISTS', message: 'El nombre del monedero ya está en uso.' } }, { status: 409 });
+    }
+    if (!nextType || (body.currency !== undefined && body.currency !== 'PEN' && body.currency !== 'USD')) {
+      return HttpResponse.json({ error: { code: 'INVALID_WALLET_DATA', message: 'Selecciona un tipo de monedero y una moneda disponibles.' } }, { status: 422 });
+    }
+    const transactionCount = [...savedTransactions.values()].filter((transaction) => transaction.wallet_id === wallet.id).length;
+    if (body.currency && body.currency !== wallet.currency && transactionCount > 0) {
+      return HttpResponse.json({ error: { code: 'WALLET_HAS_TRANSACTIONS', message: 'No puedes cambiar la moneda de un monedero con movimientos.' } }, { status: 409 });
+    }
+    if (body.status === 'INACTIVE') {
+      if (wallet.is_default) return HttpResponse.json({ error: { code: 'WALLET_IS_DEFAULT', message: 'Primero marca otro monedero como predeterminado.' } }, { status: 409 });
+      if (savedWallets.filter((item) => item.status !== 'INACTIVE').length <= 1) return HttpResponse.json({ error: { code: 'LAST_WALLET', message: 'Debes tener al menos un monedero activo.' } }, { status: 409 });
+      wallet.status = 'INACTIVE';
+    }
+    if (body.status === 'ACTIVE') wallet.status = 'ACTIVE';
+    Object.assign(wallet, { ...(name ? { name } : {}), type: nextType, ...(body.currency ? { currency: body.currency } : {}) });
+    return HttpResponse.json(walletResponse(wallet));
+  }),
+  http.delete('*/api/v1/wallets/:walletId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const index = savedWallets.findIndex((item) => item.id === String(params.walletId));
+    const wallet = savedWallets[index];
+    if (!wallet) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
+    if (wallet.is_default) return HttpResponse.json({ error: { code: 'WALLET_IS_DEFAULT', message: 'Primero marca otro monedero como predeterminado.' } }, { status: 409 });
+    if (savedWallets.filter((item) => item.status !== 'INACTIVE').length <= 1) return HttpResponse.json({ error: { code: 'LAST_WALLET', message: 'Debes tener al menos un monedero activo.' } }, { status: 409 });
+    const transactionCount = [...savedTransactions.values()].filter((transaction) => transaction.wallet_id === wallet.id).length;
+    if (transactionCount > 0) wallet.status = 'INACTIVE';
+    else savedWallets.splice(index, 1);
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.post('*/api/v1/wallets/:walletId/default', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const wallet = savedWallets.find((item) => item.id === String(params.walletId));
+    if (!wallet) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
+    if (wallet.status === 'INACTIVE') return HttpResponse.json({ error: { code: 'WALLET_INACTIVE', message: 'Reactiva el monedero antes de marcarlo como predeterminado.' } }, { status: 409 });
+    savedWallets.forEach((item) => { item.is_default = item.id === wallet.id; });
+    return HttpResponse.json(walletResponse(wallet));
   }),
   http.post('*/api/v1/categories/suggest', async ({ request }) => {
     const body = await request.json() as { type?: TransactionType; concept?: string };
@@ -507,6 +943,7 @@ export const handlers = [
     });
   }),
   http.post('*/transactions', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
     const body = await request.json() as {
       type: TransactionType;
       amount: string;
@@ -517,6 +954,19 @@ export const handlers = [
       category_id: string;
       original_text?: string;
     };
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+    if (body.currency !== 'PEN' && body.currency !== 'USD') {
+      return HttpResponse.json({ error: { code: 'INVALID_CURRENCY', message: 'Selecciona una moneda válida.' } }, { status: 422 });
+    }
+    const wallet = savedWallets.find(({ id }) => id === body.wallet_id);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Selecciona un monedero disponible.' } }, { status: 422 });
+    }
+    if (wallet.currency !== body.currency) {
+      return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type);
     if (!category) {
       return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.' } }, { status: 422 });
@@ -532,34 +982,20 @@ export const handlers = [
       wallet_id: body.wallet_id,
       category,
       source: 'TEXT',
+      created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
-    const originalText = body.original_text ?? body.concept;
-    const isExceeded = /excedido/i.test(originalText);
-    const amountInCents = amountToCents(body.amount);
-    let budgetAlert: {
-      priority: 'high' | 'normal';
-      threshold_percentage: number;
-      usage_percentage: number;
-      message: string;
-    } | null = null;
-    if (amountInCents > 40000n || isExceeded) {
-      budgetAlert = {
-        priority: 'high',
-        threshold_percentage: 100,
-        usage_percentage: 105.0,
-        message: `Superaste tu tope de S/ 500.00 en ${category.name}. Llevas gastado S/ 525.00.`,
-      };
-    } else if (amountInCents > 20000n || /alerta/i.test(originalText)) {
-      budgetAlert = {
-        priority: 'normal',
-        threshold_percentage: 80,
-        usage_percentage: 80.0,
-        message: `Alcanzaste el 80% de tu presupuesto de ${category.name}.`,
-      };
-    }
+    updateWalletBalance(wallet, transaction.type, transaction.amount);
+    const alerts = body.type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
+        currency: body.currency,
+        amountCents: amountToCents(body.amount),
+        transactionDate: body.transaction_date || today(),
+      })
+      : [];
 
-    return HttpResponse.json({ transaction, budget_alert: budgetAlert }, { status: 201 });
+    return HttpResponse.json({ transaction, alerts }, { status: 201 });
   }),
   http.patch('*/transactions/:id', async ({ params, request }) => {
     const transactionId = String(params.id);
@@ -602,7 +1038,7 @@ export const handlers = [
         concept: 'Menú',
         merchant: null,
         ruc: null,
-        transaction_date: '2026-10-30',
+        transaction_date: today(),
         wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
         category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },
       },
@@ -620,21 +1056,44 @@ export const handlers = [
       category_id: string;
       wallet_id: string;
     };
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+    const wallet = savedWallets.find(({ id }) => id === body.wallet_id);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Selecciona un monedero disponible.' } }, { status: 422 });
+    }
+    if (wallet.currency !== body.currency) {
+      return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
       ?? findSuggestedCategory(body.type, '');
-    return HttpResponse.json({
-      transaction: {
-        id: 'voice-transaction-20261030-001',
-        type: body.type,
-        amount: body.amount,
+    const transaction: MockTransaction = {
+      id: crypto.randomUUID(),
+      type: body.type,
+      amount: body.amount,
+      currency: body.currency,
+      concept: body.concept,
+      transaction_date: body.transaction_date,
+      wallet_id: body.wallet_id,
+      category,
+      source: 'VOICE',
+      created_at: new Date().toISOString(),
+    };
+    savedTransactions.set(transaction.id, transaction);
+    updateWalletBalance(wallet, transaction.type, transaction.amount);
+    const alerts = body.type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
         currency: body.currency,
-        concept: body.concept,
-        transaction_date: body.transaction_date,
-        wallet_id: body.wallet_id,
-        category: { id: body.category_id, name: category.name, icon: category.icon },
-      },
+        amountCents: amountToCents(body.amount),
+        transactionDate: body.transaction_date,
+      })
+      : [];
+    return HttpResponse.json({
+      transaction,
       wallet_name: 'BCP',
-      alerts: [],
+      alerts,
     }, { status: 201 });
   }),
   http.post('*/api/v1/transactions/receipt', async ({ request }) => {
@@ -656,7 +1115,7 @@ export const handlers = [
         concept: 'Supermercado XYZ',
         merchant: 'Supermercado XYZ',
         ruc: '20123456789',
-        transaction_date: '2026-10-31',
+        transaction_date: today(),
         wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
         category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },
       },
@@ -674,21 +1133,44 @@ export const handlers = [
       category_id: string;
       wallet_id: string;
     };
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+    const wallet = savedWallets.find(({ id }) => id === body.wallet_id);
+    if (!wallet) {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Selecciona un monedero disponible.' } }, { status: 422 });
+    }
+    if (wallet.currency !== body.currency) {
+      return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
       ?? findSuggestedCategory(body.type, '');
-    return HttpResponse.json({
-      transaction: {
-        id: 'receipt-transaction-20261031-001',
-        type: body.type,
-        amount: body.amount,
+    const transaction: MockTransaction = {
+      id: crypto.randomUUID(),
+      type: body.type,
+      amount: body.amount,
+      currency: body.currency,
+      concept: body.concept,
+      transaction_date: body.transaction_date,
+      wallet_id: body.wallet_id,
+      category,
+      source: 'RECEIPT',
+      created_at: new Date().toISOString(),
+    };
+    savedTransactions.set(transaction.id, transaction);
+    updateWalletBalance(wallet, transaction.type, transaction.amount);
+    const alerts = body.type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
         currency: body.currency,
-        concept: body.concept,
-        transaction_date: body.transaction_date,
-        wallet_id: body.wallet_id,
-        category: { id: body.category_id, name: category.name, icon: category.icon },
-      },
+        amountCents: amountToCents(body.amount),
+        transactionDate: body.transaction_date,
+      })
+      : [];
+    return HttpResponse.json({
+      transaction,
       wallet_name: 'BCP',
-      alerts: [],
+      alerts,
     }, { status: 201 });
   }),
   http.post('*/auth/login', async ({ request }) => {
