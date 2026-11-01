@@ -1,142 +1,152 @@
-
 import {
-  CarFront,
+  BookOpen,
+  BusFront,
   CircleHelp,
+  Gamepad2,
   HeartPulse,
+  House,
   Pencil,
+  ReceiptText,
+  ShoppingBag,
   Utensils,
+  Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { formatMoney } from '../utils/money';
 import type { Budget } from '../types/budget.types';
 
 const categoryIcons: Record<string, LucideIcon> = {
   alimentación: Utensils,
-  transporte: CarFront,
+  transporte: BusFront,
   salud: HeartPulse,
+  hogar: House,
+  servicios: ReceiptText,
+  entretenimiento: Gamepad2,
+  educación: BookOpen,
+  compras: ShoppingBag,
+  'salidas con amigos': Users,
 };
 
 interface BudgetCardProps {
   budget: Budget;
   onEdit: (budget: Budget) => void;
+  onDeactivate: (budget: Budget) => void;
+  onReactivate: (budget: Budget) => void;
+  busy?: boolean;
 }
 
-function toCents(amount: string): bigint {
-  const [whole = '0', fraction = ''] = amount.split('.');
-  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+function getPeriodName(budget: Budget): string {
+  if (budget.period_type === 'WEEKLY') return 'Semanal';
+  if (budget.period_type === 'MONTHLY') return 'Mensual';
+  return `Cada ${budget.period_days ?? 0} días`;
 }
 
-function fromCents(cents: bigint): string {
-  const absolute = cents < 0n ? -cents : cents;
+function getRestartLabel(periodEnd: string): string {
+  const [year = 1970, month = 1, day = 1] = periodEnd.split('-').map(Number);
+  const nextPeriod = new Date(year, month - 1, day + 1, 12);
+  const date = new Intl.DateTimeFormat('es-PE', {
+    day: 'numeric',
+    month: 'long',
+  }).format(nextPeriod);
 
-  return `${cents < 0n ? '-' : ''}${absolute / 100n}.${(absolute % 100n)
-    .toString()
-    .padStart(2, '0')}`;
+  return `Se reinicia el ${date}`;
 }
 
-export function BudgetCard({ budget, onEdit }: BudgetCardProps) {
-  const Icon =
-    categoryIcons[budget.category_name.toLocaleLowerCase('es-PE')] ??
-    CircleHelp;
+function getProgressState(percentage: number): { label: string; color: string } {
+  if (percentage >= 100) return { label: 'Te pasaste', color: 'bg-danger-600' };
+  if (percentage >= 80) return { label: 'Estás cerca del tope', color: 'bg-warning-500' };
+  return { label: 'Vas bien', color: 'bg-brand-500' };
+}
 
-  const percentage = Math.max(0, budget.usage_percentage);
-
-  const progressColor =
-    percentage > 100
-      ? 'bg-red-600'
-      : percentage > 80
-        ? 'bg-yellow-500'
-        : 'bg-brand-600';
-
-  const remaining = budget.monthly_limit
-    ? fromCents(
-      toCents(budget.monthly_limit) - toCents(budget.spent)
-    )
-    : null;
+export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = false }: BudgetCardProps) {
+  const Icon = categoryIcons[budget.category.name.toLocaleLowerCase('es-PE')] ?? CircleHelp;
+  const percentage = Math.max(0, budget.percentage);
+  const state = getProgressState(percentage);
+  const isInactive = budget.status === 'INACTIVE';
+  const negativeRemaining = budget.remaining.startsWith('-');
+  const remainingAmount = negativeRemaining ? budget.remaining.slice(1) : budget.remaining;
+  const triggeredThresholds = budget.thresholds.filter((threshold) => threshold.triggered);
 
   return (
-    <article className="mb-4 rounded-xl border border-ink-300 bg-white p-5 shadow-sm">
-
-      {/* Encabezado: icono y categoría */}
-      <div className="flex items-center justify-between gap-3">
+    <article aria-labelledby={`budget-${budget.id}-title`} className="rounded-xl border border-ink-300 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <Icon
-            aria-hidden="true"
-            size={22}
-            strokeWidth={1.8}
-            className="shrink-0 text-gray-500"
-          />
-
-          <h2 className="truncate text-base font-semibold text-gray-900">
-            {budget.category_name}
-          </h2>
+          <Icon aria-hidden="true" size={20} className="shrink-0 text-ink-700" />
+          <div className="min-w-0">
+            <h2 id={`budget-${budget.id}-title`} className="truncate text-base font-semibold text-ink-900">
+              {budget.category.name}
+            </h2>
+            <p className="text-xs text-ink-500">{getPeriodName(budget)} · {budget.currency}</p>
+          </div>
         </div>
-
-        {/* Botón editar */}
-        <button
-          type="button"
-          aria-label={`Editar presupuesto de ${budget.category_name}`}
-          onClick={() => onEdit(budget)}
-          className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white p-2 text-teal-600 transition-colors hover:bg-teal-50"
-        >
-          <Pencil aria-hidden="true" size={18} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {!isInactive && (
+            <>
+              <button
+                type="button"
+                aria-label={`Editar presupuesto de ${budget.category.name}`}
+                onClick={() => onEdit(budget)}
+                className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-accent-600 hover:bg-accent-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-500"
+              >
+                <Pencil aria-hidden="true" size={19} />
+              </button>
+              <button
+                type="button"
+                aria-label={`Desactivar presupuesto de ${budget.category.name}`}
+                onClick={() => onDeactivate(budget)}
+                disabled={busy}
+                className="min-h-11 rounded-md px-2 text-xs font-medium text-ink-500 underline hover:text-danger-600 disabled:opacity-50"
+              >
+                Desactivar
+              </button>
+            </>
+          )}
+          {isInactive && (
+            <button
+              type="button"
+              onClick={() => onReactivate(budget)}
+              disabled={busy}
+              className="min-h-11 rounded-md px-2 text-sm font-medium text-accent-600 underline disabled:opacity-50"
+            >
+              Reactivar
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Barra de progreso */}
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <p className={`text-sm font-medium ${percentage >= 100 ? 'text-danger-600' : percentage >= 80 ? 'text-ink-700' : 'text-ink-500'}`}>
+          {percentage.toFixed(1)}% · {state.label}
+        </p>
+        {isInactive && <span className="rounded-full bg-bg px-2.5 py-1 text-xs font-medium text-ink-700">Inactivo</span>}
+      </div>
+
       <div
-        className="mt-4 h-2 overflow-hidden rounded-full bg-gray-200"
+        className="mt-2 h-2 overflow-hidden rounded-full bg-ink-300/50"
         role="progressbar"
-        aria-label={`Uso del presupuesto de ${budget.category_name}`}
+        aria-label={`Uso del presupuesto de ${budget.category.name}`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.min(percentage, 100)}
+        aria-valuetext={`${percentage.toFixed(1)}% utilizado. ${state.label}.`}
       >
-        <div
-          className={`h-full ${progressColor}`}
-          style={{ width: `${Math.min(percentage, 100)}%` }}
-        />
+        <div className={`h-full rounded-full ${state.color}`} style={{ width: `${Math.min(percentage, 100)}%` }} />
       </div>
 
-      <p className="mt-2 text-xs font-medium text-ink-500">
-        {budget.usage_percentage.toFixed(1)}% utilizado
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+        <p className="text-ink-700">Gastado: {formatMoney(budget.consumed, budget.currency)}</p>
+        <p className="font-semibold text-ink-700">Tope: {formatMoney(budget.amount, budget.currency)}</p>
+      </div>
+      <p className={`mt-1 text-sm ${negativeRemaining ? 'font-medium text-danger-600' : 'text-ink-700'}`}>
+        {negativeRemaining
+          ? `Te pasaste por ${formatMoney(remainingAmount, budget.currency)}`
+          : `Disponible: ${formatMoney(budget.remaining, budget.currency)}`}
       </p>
+      <p className="mt-1 text-xs text-ink-500">{getRestartLabel(budget.period_end)}</p>
 
-      {/* Gastado y tope */}
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <p>
-          <span className="text-xs font-medium text-gray-500">
-            Gastado:
-          </span>
-          <br />
-          <span className="text-lg font-bold tabular-nums text-ink-900">
-            S/ {budget.spent}
-          </span>
-        </p>
-
-        <p className="text-right">
-          <span className="text-xs font-medium text-gray-500">
-            Tope:
-          </span>
-          <br />
-          <span className="text-lg font-bold tabular-nums text-ink-900">
-            {budget.monthly_limit
-              ? `S/ ${budget.monthly_limit}`
-              : 'Sin tope'}
-          </span>
-        </p>
-      </div>
-
-      {/* Dinero disponible o excedido */}
-      {remaining !== null && (
-        <p
-          className={`mt-3 text-sm font-medium ${remaining.startsWith('-')
-            ? 'text-red-600'
-            : 'text-gray-500'
-            }`}
-        >
-          {remaining.startsWith('-')
-            ? `Excedido: S/ ${remaining.slice(1)}`
-            : `Disponible: S/ ${remaining}`}
+      {triggeredThresholds.length > 0 && (
+        <p className="mt-2 text-xs font-medium text-warning-600">
+          Aviso alcanzado: {triggeredThresholds.map(({ percentage: value }) => `${value}%`).join(', ')}
         </p>
       )}
     </article>
