@@ -15,7 +15,6 @@ export function BudgetsPage() {
   const {
     budgets,
     categories,
-    period,
     loading,
     saving,
     error,

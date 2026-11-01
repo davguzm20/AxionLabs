@@ -8,6 +8,8 @@ import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { ChatPage } from '../features/chat/ChatPage';
+import { ClassificationPage } from '../features/classification/pages/ClassificationPage';
+import { WalletsPage } from '../features/wallets/pages/WalletsPage';
 import { BudgetsPage } from '../features/budgets/pages/BudgetsPage';
 import { SettingsPage } from '../features/settings/pages/SettingsPage';
 
@@ -22,9 +24,10 @@ export function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route path="/inicio" element={<ChatPage />} />
+          <Route path="/clasificar" element={<ClassificationPage />} />
           <Route path="/historial" element={<PlaceholderPage title="Historial" />} />
           <Route path="/presupuestos" element={<BudgetsPage />} />
-          <Route path="/monederos" element={<PlaceholderPage title="Monederos" />} />
+          <Route path="/monederos" element={<WalletsPage />} />
           <Route path="/ajustes" element={<SettingsPage />} />
         </Route>
       </Route>
