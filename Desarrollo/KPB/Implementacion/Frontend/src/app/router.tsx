@@ -6,7 +6,6 @@ import { RegisterPage } from '../features/auth/RegisterPage';
 import { ForgotPasswordPage } from '../features/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
-import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { ChatPage } from '../features/chat/ChatPage';
 import { ClassificationPage } from '../features/classification/pages/ClassificationPage';
 import { WalletsPage } from '../features/wallets/pages/WalletsPage';
@@ -14,6 +13,7 @@ import { BudgetsPage } from '../features/budgets/pages/BudgetsPage';
 import { BudgetFormPage } from '../features/budgets/pages/BudgetFormPage';
 import { SettingsPage } from '../features/settings/pages/SettingsPage';
 import { NotificationsPage } from '../features/notifications/pages/NotificationsPage';
+import { HistoryPage } from '../features/history/pages/HistoryPage';
 
 export function AppRoutes() {
   return (
@@ -27,7 +27,7 @@ export function AppRoutes() {
         <Route element={<AppShell />}>
           <Route path="/inicio" element={<ChatPage />} />
           <Route path="/clasificar" element={<ClassificationPage />} />
-          <Route path="/historial" element={<PlaceholderPage title="Historial" />} />
+          <Route path="/historial" element={<HistoryPage />} />
           <Route path="/presupuestos" element={<BudgetsPage />} />
           <Route path="/presupuestos/nuevo" element={<BudgetFormPage />} />
           <Route path="/presupuestos/:budgetId/editar" element={<BudgetFormPage />} />

@@ -14,6 +14,8 @@ type MockTransaction = {
   wallet_id: string;
   category: MockCategory;
   source: 'TEXT' | 'MANUAL' | 'VOICE' | 'RECEIPT';
+  needs_review?: boolean;
+  created_at?: string;
 };
 type MockNotification = {
   id: string;
@@ -41,6 +43,7 @@ const categoryCatalog: MockCategory[] = [
   { id: 'category-sales', name: 'Ventas', type: 'INCOME', icon: 'store' },
   { id: 'category-other-income', name: 'Otros', type: 'INCOME', icon: 'circle-help' },
   { id: 'category-friends', name: 'Salidas con amigos', type: 'EXPENSE', icon: 'users' },
+  { id: 'category-subscriptions', name: 'Suscripciones', type: 'EXPENSE', icon: 'tv' },
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
@@ -176,9 +179,59 @@ let savedBudgets = createSeedBudgets();
 const today = () => new Date().toISOString().slice(0, 10);
 const hasSession = (request: Request) => request.headers.get('Authorization')?.startsWith('Bearer ') ?? false;
 
+function shiftDate(value: Date, days: number): string {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return dateToString(date);
+}
+
+function createSeedTransactions(): MockTransaction[] {
+  const now = new Date();
+  const todayDate = dateToString(now);
+  const yesterday = shiftDate(now, -1);
+  const createdAt = (date: string, time: string) => `${date}T${time}:00-05:00`;
+  const seed = (
+    id: string,
+    type: TransactionType,
+    amount: string,
+    concept: string,
+    transactionDate: string,
+    walletId: string,
+    categoryId: string,
+    time: string,
+  ): MockTransaction => ({
+    id,
+    type,
+    amount,
+    currency: 'PEN',
+    concept,
+    transaction_date: transactionDate,
+    wallet_id: walletId,
+    category: { ...categoryCatalog.find(({ id: categoryKey }) => categoryKey === categoryId)! },
+    source: 'MANUAL',
+    needs_review: false,
+    created_at: createdAt(transactionDate, time),
+  });
+
+  return [
+    seed('history-dinner', 'EXPENSE', '120.00', 'Cena', todayDate, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', '19:30'),
+    seed('history-uber', 'EXPENSE', '18.50', 'Uber', todayDate, 'wallet-cash-default', 'category-transport', '18:10'),
+    seed('history-salary', 'INCOME', '2500.00', 'Sueldo', yesterday, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'category-salary', '09:00'),
+    seed('history-market', 'EXPENSE', '86.30', 'Supermercado', yesterday, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', '08:30'),
+    seed('history-netflix', 'EXPENSE', '34.90', 'Netflix', yesterday, '4d6b3036-4290-4bde-aea4-375c779ef48b', 'category-subscriptions', '07:15'),
+  ];
+}
+
+function resetSavedTransactions() {
+  savedTransactions.clear();
+  for (const transaction of createSeedTransactions()) savedTransactions.set(transaction.id, transaction);
+}
+
+resetSavedTransactions();
+
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
-  savedTransactions.clear();
+  resetSavedTransactions();
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
 }
@@ -337,6 +390,69 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
   http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog.map((category) => ({ ...category, status: 'ACTIVE' })))),
+  http.get('*/transactions/summary', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const query = new URL(request.url).searchParams;
+    const filtered = [...savedTransactions.values()].filter((transaction) => {
+      if (query.get('date_from') && transaction.transaction_date < query.get('date_from')!) return false;
+      if (query.get('date_to') && transaction.transaction_date > query.get('date_to')!) return false;
+      if (query.get('type') && transaction.type !== query.get('type')) return false;
+      if (query.get('category_id') && transaction.category.id !== query.get('category_id')) return false;
+      if (query.get('wallet_id') && transaction.wallet_id !== query.get('wallet_id')) return false;
+      const search = query.get('q')?.trim().toLocaleLowerCase('es-PE');
+      if (search && !transaction.concept.toLocaleLowerCase('es-PE').includes(search)) return false;
+      return true;
+    });
+    const totals = new Map<string, { income: bigint; expense: bigint }>();
+    for (const transaction of filtered) {
+      const total = totals.get(transaction.currency) ?? { income: 0n, expense: 0n };
+      if (transaction.type === 'INCOME') total.income += amountToCents(transaction.amount);
+      else total.expense += amountToCents(transaction.amount);
+      totals.set(transaction.currency, total);
+    }
+    return HttpResponse.json({
+      date_from: query.get('date_from'),
+      date_to: query.get('date_to'),
+      count: filtered.length,
+      by_currency: [...totals.entries()].map(([currency, total]) => ({
+        currency,
+        income: centsToMoney(total.income),
+        expense: centsToMoney(total.expense),
+        net: centsToMoney(total.income - total.expense),
+      })),
+    });
+  }),
+  http.get('*/transactions', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const query = new URL(request.url).searchParams;
+    const filtered = [...savedTransactions.values()].filter((transaction) => {
+      if (query.get('date_from') && transaction.transaction_date < query.get('date_from')!) return false;
+      if (query.get('date_to') && transaction.transaction_date > query.get('date_to')!) return false;
+      if (query.get('type') && transaction.type !== query.get('type')) return false;
+      if (query.get('category_id') && transaction.category.id !== query.get('category_id')) return false;
+      if (query.get('wallet_id') && transaction.wallet_id !== query.get('wallet_id')) return false;
+      const search = query.get('q')?.trim().toLocaleLowerCase('es-PE');
+      if (search && !transaction.concept.toLocaleLowerCase('es-PE').includes(search)) return false;
+      return true;
+    }).sort((first, second) => {
+      const dateOrder = second.transaction_date.localeCompare(first.transaction_date);
+      return dateOrder || (second.created_at ?? '').localeCompare(first.created_at ?? '');
+    });
+    const pageSize = Math.min(100, Math.max(1, Number(query.get('page_size')) || 20));
+    const page = Math.max(1, Number(query.get('page')) || 1);
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({
+      data: filtered.slice(start, start + pageSize),
+      meta: { page, page_size: pageSize, total: filtered.length, pages: Math.ceil(filtered.length / pageSize) },
+    });
+  }),
+  http.get('*/transactions/:id', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const transaction = savedTransactions.get(String(params.id));
+    return transaction
+      ? HttpResponse.json(transaction)
+      : HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró la transacción.' } }, { status: 404 });
+  }),
   http.get('*/api/v1/users/me/preferences', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     return HttpResponse.json({ ...savedPreferences });
@@ -777,6 +893,7 @@ export const handlers = [
       wallet_id: body.wallet_id,
       category,
       source: 'TEXT',
+      created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
     const alerts = body.type === 'EXPENSE'
@@ -861,6 +978,7 @@ export const handlers = [
       wallet_id: body.wallet_id,
       category,
       source: 'VOICE',
+      created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
     const alerts = body.type === 'EXPENSE'
@@ -926,6 +1044,7 @@ export const handlers = [
       wallet_id: body.wallet_id,
       category,
       source: 'RECEIPT',
+      created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
     const alerts = body.type === 'EXPENSE'
