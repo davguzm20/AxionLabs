@@ -13,6 +13,7 @@ import { WalletsPage } from '../features/wallets/pages/WalletsPage';
 import { BudgetsPage } from '../features/budgets/pages/BudgetsPage';
 import { BudgetFormPage } from '../features/budgets/pages/BudgetFormPage';
 import { SettingsPage } from '../features/settings/pages/SettingsPage';
+import { NotificationsPage } from '../features/notifications/pages/NotificationsPage';
 
 export function AppRoutes() {
   return (
@@ -32,6 +33,7 @@ export function AppRoutes() {
           <Route path="/presupuestos/:budgetId/editar" element={<BudgetFormPage />} />
           <Route path="/monederos" element={<WalletsPage />} />
           <Route path="/ajustes" element={<SettingsPage />} />
+          <Route path="/notificaciones" element={<NotificationsPage />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFoundPage />} />

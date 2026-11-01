@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { RotateCcw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChatBubble } from './components/ChatBubble';
@@ -12,6 +13,7 @@ import { confirmVoicePreview, createVoicePreview } from './voice/voiceService';
 import { confirmReceiptPreview, createReceiptPreview } from './receipt/receiptService';
 import { validateReceiptImage } from './receipt/imageValidation';
 import type { TransactionDraft, TransactionPreview } from './transactionPreview.types';
+import { NotificationBell } from '../notifications/components/NotificationBell';
 
 type ChatMessage =
   | { id: string; kind: 'bubble'; author: 'bot' | 'user'; text: string; botMood?: BotMood }
@@ -19,12 +21,13 @@ type ChatMessage =
   | { id: string; kind: 'preview'; source: 'VOICE' | 'RECEIPT'; preview: TransactionPreview; imageFile?: File; isSaving?: boolean; saveError?: string }
   | { id: string; kind: 'alert'; alert: BudgetAlert };
 type ExtractionResponse = { transaction: Transaction };
-type SaveResponse = { transaction: Transaction; budget_alert?: BudgetAlert | null; wallet_name?: string };
+type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; wallet_name?: string };
 type ApiError = Error & { status?: number; code?: string };
 
 const walletId = '4d6b3036-4290-4bde-aea4-375c779ef48b';
 
 export function ChatPage() {
+  const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: 'greeting', kind: 'bubble', author: 'bot', text: '¡Hola! Soy KhipuBot. ¿Qué gastos o ingresos tuviste hoy? Puedes escribirme, enviarme un audio o la foto de un comprobante.' },
   ]);
@@ -98,13 +101,19 @@ export function ChatPage() {
           category_id: transaction.category.id,
         }),
       });
+      void queryClient.invalidateQueries({ queryKey: ['budgets'] });
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
       setMessages((current) => {
         const confirmationIndex = current.findIndex((message) => message.kind === 'confirmation' && message.id === messageId);
         const next = current.map((message) => message.kind === 'confirmation' && message.id === messageId
           ? { ...message, transaction: response.transaction, status: 'confirmed' as const, isSaving: false, saveError: undefined }
           : message);
-        if (response.budget_alert && confirmationIndex >= 0) {
-          next.splice(confirmationIndex + 1, 0, { id: crypto.randomUUID(), kind: 'alert', alert: response.budget_alert });
+        if (response.alerts?.length && confirmationIndex >= 0) {
+          next.splice(confirmationIndex + 1, 0, ...response.alerts.map((alert) => ({
+            id: crypto.randomUUID(),
+            kind: 'alert' as const,
+            alert,
+          })));
         }
         return next;
       });
@@ -189,6 +198,8 @@ export function ChatPage() {
           icon: response.transaction.category.icon ?? 'circle-help',
         },
       };
+      void queryClient.invalidateQueries({ queryKey: ['budgets'] });
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
       setMessages((current) => {
         const next = current.map((message) => message.kind === 'preview' && message.id === messageId
           ? {
@@ -238,6 +249,7 @@ export function ChatPage() {
           <h1 id="chat-title" className="font-semibold text-ink-900">KhipuBot</h1>
           <p className="text-xs text-brand-700"><span aria-hidden="true">●</span> En línea</p>
         </div>
+        <NotificationBell />
       </header>
 
       <div ref={logRef} role="log" aria-live="polite" aria-label="Conversación con KhipuBot" className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-white p-4">

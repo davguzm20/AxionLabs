@@ -13,11 +13,26 @@ type MockTransaction = {
   transaction_date: string;
   wallet_id: string;
   category: MockCategory;
-  source: 'TEXT' | 'MANUAL';
+  source: 'TEXT' | 'MANUAL' | 'VOICE' | 'RECEIPT';
+};
+type MockNotification = {
+  id: string;
+  type: 'BUDGET_ALERT';
+  title: string;
+  body: string;
+  status: 'UNREAD' | 'READ';
+  alert_id: string | null;
+  created_at: string;
+  read_at: string | null;
+};
+type NotificationEvent = {
+  event: 'alert.created' | 'notification.read';
+  id: string;
+  data: Record<string, unknown>;
 };
 
 const categoryCatalog: MockCategory[] = [
-  { id: 'category-food', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
+  { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
   { id: 'category-transport', name: 'Transporte', type: 'EXPENSE', icon: 'bus' },
   { id: 'category-health', name: 'Salud', type: 'EXPENSE', icon: 'heart-pulse' },
   { id: 'category-other', name: 'Otros', type: 'EXPENSE', icon: 'circle-help' },
@@ -25,11 +40,13 @@ const categoryCatalog: MockCategory[] = [
   { id: 'category-freelance', name: 'Freelance', type: 'INCOME', icon: 'laptop' },
   { id: 'category-sales', name: 'Ventas', type: 'INCOME', icon: 'store' },
   { id: 'category-other-income', name: 'Otros', type: 'INCOME', icon: 'circle-help' },
-  { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
   { id: 'category-friends', name: 'Salidas con amigos', type: 'EXPENSE', icon: 'users' },
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
+let savedNotifications: MockNotification[] = [];
+let savedPreferences = { main_currency: 'PEN' as const, email_notifications: true };
+const notificationSubscribers = new Set<(event: NotificationEvent) => void>();
 const savedWallets: Wallet[] = [
   {
     id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
@@ -48,10 +65,10 @@ const savedWallets: Wallet[] = [
     is_default: false,
   },
 ];
-const MOCK_TODAY = new Date(2026, 9, 31, 12);
+const MOCK_TODAY = new Date();
 const mockBudgetSeeds = [
   {
-    id: 'budget-food', categoryId: 'category-food', currency: 'PEN' as const, amount: '500.00', consumed: '410.80', periodType: 'MONTHLY' as const, thresholds: [80],
+    id: 'budget-food', categoryId: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', currency: 'PEN' as const, amount: '500.00', consumed: '410.80', periodType: 'MONTHLY' as const, thresholds: [80],
   },
   {
     id: 'budget-transport', categoryId: 'category-transport', currency: 'PEN' as const, amount: '60.00', consumed: '69.80', periodType: 'MONTHLY' as const, thresholds: [80, 100],
@@ -161,6 +178,18 @@ const hasSession = (request: Request) => request.headers.get('Authorization')?.s
 
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
+  savedTransactions.clear();
+  savedNotifications = [];
+  savedPreferences = { main_currency: 'PEN', email_notifications: true };
+}
+
+export function resetNotificationMocks() {
+  savedNotifications = [];
+  savedPreferences = { main_currency: 'PEN', email_notifications: true };
+}
+
+function publishNotificationEvent(event: NotificationEvent) {
+  for (const subscriber of notificationSubscribers) subscriber(event);
 }
 
 function sessionExpired() {
@@ -198,11 +227,108 @@ function toThresholds(budget: Budget): BudgetThreshold[] {
   return budget.thresholds.map((threshold) => ({ ...threshold }));
 }
 
+function formatMockMoney(cents: bigint, currency: string): string {
+  return `${currency === 'PEN' ? 'S/' : '$'} ${centsToMoney(cents)}`;
+}
+
+function evaluateMockBudgetAlerts(input: {
+  categoryId: string;
+  currency: string;
+  amountCents: bigint;
+  transactionDate: string;
+}): Array<{
+  id: string;
+  title: string;
+  priority: 'high' | 'normal';
+  threshold_percentage: number;
+  usage_percentage: number;
+  message: string;
+}> {
+  const alerts: Array<{
+    id: string;
+    title: string;
+    priority: 'high' | 'normal';
+    threshold_percentage: number;
+    usage_percentage: number;
+    message: string;
+  }> = [];
+
+  for (const budget of savedBudgets) {
+    if (budget.status !== 'ACTIVE' || budget.category.id !== input.categoryId || budget.currency !== input.currency) continue;
+    if (input.transactionDate < budget.period_start || input.transactionDate > budget.period_end) continue;
+
+    const amountCents = amountToCents(budget.amount);
+    const consumedCents = amountToCents(budget.consumed) + input.amountCents;
+    budget.consumed = centsToMoney(consumedCents);
+    budget.remaining = centsToMoney(amountCents - consumedCents);
+    budget.percentage = amountCents === 0n ? 0 : Number((consumedCents * 1_000n) / amountCents) / 10;
+
+    const crossed = budget.thresholds
+      .filter((threshold) => !threshold.triggered
+        && consumedCents * 100n >= amountCents * BigInt(threshold.percentage))
+      .sort((left, right) => left.percentage - right.percentage);
+
+    for (const threshold of crossed) {
+      threshold.triggered = true;
+      const remainingCents = amountCents - consumedCents;
+      const overspentCents = remainingCents < 0n ? -remainingCents : 0n;
+      const title = threshold.percentage === 100 && remainingCents >= 0n
+        ? `Alcanzaste el 100% de tu presupuesto de ${budget.category.name}.`
+        : `Cruzaste el ${threshold.percentage}% de tu presupuesto de ${budget.category.name}.`;
+      const body = remainingCents < 0n
+        ? `Superaste tu presupuesto en ${formatMockMoney(overspentCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
+        : threshold.percentage === 100
+          ? `Límite: ${formatMockMoney(amountCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
+          : `Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}. Te quedan ${formatMockMoney(remainingCents, budget.currency)}.`;
+      const alertId = crypto.randomUUID();
+      const notification: MockNotification = {
+        id: crypto.randomUUID(),
+        type: 'BUDGET_ALERT',
+        title,
+        body,
+        status: 'UNREAD',
+        alert_id: alertId,
+        created_at: new Date().toISOString(),
+        read_at: null,
+      };
+      savedNotifications.unshift(notification);
+      const priority = threshold.percentage === 100 ? 'high' : 'normal';
+      const usagePercentage = Number((consumedCents * 1_000n) / amountCents) / 10;
+      alerts.push({
+        id: alertId,
+        title,
+        priority,
+        threshold_percentage: threshold.percentage,
+        usage_percentage: usagePercentage,
+        message: `${title} ${body}`,
+      });
+      publishNotificationEvent({
+        event: 'alert.created',
+        id: alertId,
+        data: {
+          id: alertId,
+          budget_id: budget.id,
+          notification_id: notification.id,
+          category: budget.category.name,
+          percentage: threshold.percentage,
+          consumed: centsToMoney(consumedCents),
+          limit: budget.amount,
+          remaining: centsToMoney(remainingCents),
+          priority: priority === 'high' ? 'HIGH' : 'NORMAL',
+          created_at: notification.created_at,
+        },
+      });
+    }
+  }
+
+  return alerts;
+}
+
 function findSuggestedCategory(type: TransactionType, concept: string): MockCategory {
   const normalized = concept.toLocaleLowerCase('es-PE');
   const patterns = type === 'INCOME'
     ? [[/sueldo|salario|planilla/, 'category-salary'], [/freelance|servicio/, 'category-freelance'], [/venta|vend[ií]/, 'category-sales']]
-    : [[/caf[eé]|almuerzo|cena|comida|men[uú]|restaurante/, 'category-food'], [/taxi|bus|pasaje|metro|transporte/, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
+    : [[/caf[eé]|almuerzo|cena|comida|men[uú]|restaurante/, 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'], [/taxi|bus|pasaje|metro|transporte/, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
   const matchedId = patterns.find(([pattern]) => (pattern as RegExp).test(normalized))?.[1] as string | undefined;
   const fallbackId = type === 'INCOME' ? 'category-other-income' : 'category-other';
   return categoryCatalog.find(({ id }) => id === (matchedId ?? fallbackId)) ?? categoryCatalog[0]!;
@@ -211,6 +337,118 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
   http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog.map((category) => ({ ...category, status: 'ACTIVE' })))),
+  http.get('*/api/v1/users/me/preferences', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    return HttpResponse.json({ ...savedPreferences });
+  }),
+  http.patch('*/api/v1/users/me/preferences', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const body = await request.json() as { email_notifications?: unknown };
+    if (typeof body.email_notifications !== 'boolean') {
+      return HttpResponse.json({ error: { code: 'VALIDATION_ERROR', message: 'La preferencia de correo debe ser verdadera o falsa.' } }, { status: 422 });
+    }
+    savedPreferences = { ...savedPreferences, email_notifications: body.email_notifications };
+    return HttpResponse.json({ ...savedPreferences });
+  }),
+  http.get('*/api/v1/notifications/stream', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const encoder = new TextEncoder();
+    let cleanup = () => {};
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        let closed = false;
+        const send = (event: NotificationEvent) => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`event: ${event.event}\nid: ${event.id}\ndata: ${JSON.stringify(event.data)}\n\n`));
+          } catch {
+            close();
+          }
+        };
+        const heartbeat = setInterval(() => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(': ping\n\n'));
+          } catch {
+            close();
+          }
+        }, 25_000);
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(heartbeat);
+          notificationSubscribers.delete(send);
+          request.signal.removeEventListener('abort', close);
+        };
+        cleanup = close;
+        notificationSubscribers.add(send);
+        controller.enqueue(encoder.encode('retry: 3000\n\n'));
+        request.signal.addEventListener('abort', close, { once: true });
+      },
+      cancel() {
+        cleanup();
+      },
+    });
+    return new HttpResponse(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  }),
+  http.get('*/api/v1/notifications', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const url = new URL(request.url);
+    const status = url.searchParams.get('status');
+    if (status && status !== 'UNREAD' && status !== 'READ') {
+      return HttpResponse.json({ error: { code: 'INVALID_STATUS', message: 'Selecciona un filtro válido.' } }, { status: 422 });
+    }
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1);
+    const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('page_size') ?? 20) || 20));
+    const sorted = savedNotifications
+      .filter((notification) => !status || notification.status === status)
+      .sort((left, right) => {
+        if (left.status !== right.status) return left.status === 'UNREAD' ? -1 : 1;
+        return right.created_at.localeCompare(left.created_at);
+      });
+    const offset = (page - 1) * pageSize;
+    const data = sorted.slice(offset, offset + pageSize).map((notification) => ({ ...notification }));
+    return HttpResponse.json({
+      data,
+      meta: { page, page_size: pageSize, total: sorted.length, pages: Math.ceil(sorted.length / pageSize) },
+    });
+  }),
+  http.patch('*/api/v1/notifications/read-all', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const readAt = new Date().toISOString();
+    for (const notification of savedNotifications) {
+      if (notification.status !== 'UNREAD') continue;
+      notification.status = 'READ';
+      notification.read_at = readAt;
+      publishNotificationEvent({
+        event: 'notification.read',
+        id: notification.id,
+        data: { id: notification.id, status: 'READ' },
+      });
+    }
+    return HttpResponse.json({ message: 'Notificaciones marcadas como leídas.' });
+  }),
+  http.patch('*/api/v1/notifications/:notificationId/read', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const notification = savedNotifications.find((item) => item.id === String(params.notificationId));
+    if (!notification) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos esta notificación.' } }, { status: 404 });
+    if (notification.status === 'UNREAD') {
+      notification.status = 'READ';
+      notification.read_at = new Date().toISOString();
+      publishNotificationEvent({
+        event: 'notification.read',
+        id: notification.id,
+        data: { id: notification.id, status: 'READ' },
+      });
+    }
+    return HttpResponse.json({ ...notification });
+  }),
   http.get('*/api/v1/budgets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     const url = new URL(request.url);
@@ -507,6 +745,7 @@ export const handlers = [
     });
   }),
   http.post('*/transactions', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
     const body = await request.json() as {
       type: TransactionType;
       amount: string;
@@ -517,6 +756,12 @@ export const handlers = [
       category_id: string;
       original_text?: string;
     };
+    if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+    if (body.currency !== 'PEN' && body.currency !== 'USD') {
+      return HttpResponse.json({ error: { code: 'INVALID_CURRENCY', message: 'Selecciona una moneda válida.' } }, { status: 422 });
+    }
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type);
     if (!category) {
       return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.' } }, { status: 422 });
@@ -534,32 +779,16 @@ export const handlers = [
       source: 'TEXT',
     };
     savedTransactions.set(transaction.id, transaction);
-    const originalText = body.original_text ?? body.concept;
-    const isExceeded = /excedido/i.test(originalText);
-    const amountInCents = amountToCents(body.amount);
-    let budgetAlert: {
-      priority: 'high' | 'normal';
-      threshold_percentage: number;
-      usage_percentage: number;
-      message: string;
-    } | null = null;
-    if (amountInCents > 40000n || isExceeded) {
-      budgetAlert = {
-        priority: 'high',
-        threshold_percentage: 100,
-        usage_percentage: 105.0,
-        message: `Superaste tu tope de S/ 500.00 en ${category.name}. Llevas gastado S/ 525.00.`,
-      };
-    } else if (amountInCents > 20000n || /alerta/i.test(originalText)) {
-      budgetAlert = {
-        priority: 'normal',
-        threshold_percentage: 80,
-        usage_percentage: 80.0,
-        message: `Alcanzaste el 80% de tu presupuesto de ${category.name}.`,
-      };
-    }
+    const alerts = body.type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
+        currency: body.currency,
+        amountCents: amountToCents(body.amount),
+        transactionDate: body.transaction_date || today(),
+      })
+      : [];
 
-    return HttpResponse.json({ transaction, budget_alert: budgetAlert }, { status: 201 });
+    return HttpResponse.json({ transaction, alerts }, { status: 201 });
   }),
   http.patch('*/transactions/:id', async ({ params, request }) => {
     const transactionId = String(params.id);
@@ -602,7 +831,7 @@ export const handlers = [
         concept: 'Menú',
         merchant: null,
         ruc: null,
-        transaction_date: '2026-10-30',
+        transaction_date: today(),
         wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
         category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },
       },
@@ -622,19 +851,30 @@ export const handlers = [
     };
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
       ?? findSuggestedCategory(body.type, '');
-    return HttpResponse.json({
-      transaction: {
-        id: 'voice-transaction-20261030-001',
-        type: body.type,
-        amount: body.amount,
+    const transaction: MockTransaction = {
+      id: crypto.randomUUID(),
+      type: body.type,
+      amount: body.amount,
+      currency: body.currency,
+      concept: body.concept,
+      transaction_date: body.transaction_date,
+      wallet_id: body.wallet_id,
+      category,
+      source: 'VOICE',
+    };
+    savedTransactions.set(transaction.id, transaction);
+    const alerts = body.type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
         currency: body.currency,
-        concept: body.concept,
-        transaction_date: body.transaction_date,
-        wallet_id: body.wallet_id,
-        category: { id: body.category_id, name: category.name, icon: category.icon },
-      },
+        amountCents: amountToCents(body.amount),
+        transactionDate: body.transaction_date,
+      })
+      : [];
+    return HttpResponse.json({
+      transaction,
       wallet_name: 'BCP',
-      alerts: [],
+      alerts,
     }, { status: 201 });
   }),
   http.post('*/api/v1/transactions/receipt', async ({ request }) => {
@@ -656,7 +896,7 @@ export const handlers = [
         concept: 'Supermercado XYZ',
         merchant: 'Supermercado XYZ',
         ruc: '20123456789',
-        transaction_date: '2026-10-31',
+        transaction_date: today(),
         wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
         category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },
       },
@@ -676,19 +916,30 @@ export const handlers = [
     };
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
       ?? findSuggestedCategory(body.type, '');
-    return HttpResponse.json({
-      transaction: {
-        id: 'receipt-transaction-20261031-001',
-        type: body.type,
-        amount: body.amount,
+    const transaction: MockTransaction = {
+      id: crypto.randomUUID(),
+      type: body.type,
+      amount: body.amount,
+      currency: body.currency,
+      concept: body.concept,
+      transaction_date: body.transaction_date,
+      wallet_id: body.wallet_id,
+      category,
+      source: 'RECEIPT',
+    };
+    savedTransactions.set(transaction.id, transaction);
+    const alerts = body.type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
         currency: body.currency,
-        concept: body.concept,
-        transaction_date: body.transaction_date,
-        wallet_id: body.wallet_id,
-        category: { id: body.category_id, name: category.name, icon: category.icon },
-      },
+        amountCents: amountToCents(body.amount),
+        transactionDate: body.transaction_date,
+      })
+      : [];
+    return HttpResponse.json({
+      transaction,
       wallet_name: 'BCP',
-      alerts: [],
+      alerts,
     }, { status: 201 });
   }),
   http.post('*/auth/login', async ({ request }) => {

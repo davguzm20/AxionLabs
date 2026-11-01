@@ -1,10 +1,19 @@
 import { Bell, ChevronRight, DollarSign, Lock, PieChart, User } from 'lucide-react';
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useNotificationPreferences } from '../../notifications/hooks/useNotificationPreferences';
 
 export function SettingsPage() {
   const navigate = useNavigate();
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const {
+    preferences,
+    isLoading: preferencesLoading,
+    error: preferencesError,
+    refetch: refetchPreferences,
+    saveEmailNotifications,
+    isSaving: preferencesSaving,
+    saveError,
+  } = useNotificationPreferences();
+  const notificationsEnabled = preferences?.email_notifications ?? true;
 
   return (
     <main className="h-full w-full overflow-y-auto bg-gray-50 px-4 pb-24 sm:px-6">
@@ -53,9 +62,10 @@ export function SettingsPage() {
                 type="button"
                 role="switch"
                 aria-checked={notificationsEnabled}
-                aria-label="Notificaciones"
-                onClick={() => setNotificationsEnabled((enabled) => !enabled)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${notificationsEnabled ? 'bg-teal-600' : 'bg-gray-300'
+                aria-label="Notificaciones por correo"
+                disabled={preferencesLoading || preferencesSaving || Boolean(preferencesError)}
+                onClick={() => saveEmailNotifications(!notificationsEnabled)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-wait disabled:opacity-60 ${notificationsEnabled ? 'bg-brand-600' : 'bg-gray-400'
                   }`}
               >
                 <span
@@ -64,6 +74,11 @@ export function SettingsPage() {
                 />
               </button>
             </div>
+            <p className="border-b border-ink-300 px-4 pb-3 pl-12 text-xs text-ink-500">
+              Las alertas dentro de la app siempre están activas; este ajuste controla el correo.
+            </p>
+            {preferencesError && <div role="alert" className="border-b border-ink-300 px-4 py-2 pl-12 text-sm text-danger-600"><p>No pudimos cargar esta preferencia.</p><button type="button" onClick={() => void refetchPreferences()} className="mt-1 min-h-11 font-medium text-brand-700 underline">Reintentar</button></div>}
+            {saveError && <p role="alert" className="border-b border-ink-300 px-4 py-2 pl-12 text-sm text-danger-600">No se pudo guardar la preferencia. Inténtalo nuevamente.</p>}
             <div className="flex w-full items-center justify-between p-4">
               <span className="flex items-center gap-3">
                 <DollarSign aria-hidden="true" className="shrink-0 text-gray-600" size={20} />
