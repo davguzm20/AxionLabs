@@ -17,14 +17,12 @@ import { NotificationBell } from '../notifications/components/NotificationBell';
 
 type ChatMessage =
   | { id: string; kind: 'bubble'; author: 'bot' | 'user'; text: string; botMood?: BotMood }
-  | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string; status: TransactionStatus; isSaving?: boolean; saveError?: string }
+  | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string; idempotencyKey: string; idempotencyPayload?: string; status: TransactionStatus; isSaving?: boolean; saveError?: string }
   | { id: string; kind: 'preview'; source: 'VOICE' | 'RECEIPT'; preview: TransactionPreview; imageFile?: File; isSaving?: boolean; saveError?: string }
   | { id: string; kind: 'alert'; alert: BudgetAlert };
-type ExtractionResponse = { transaction: Transaction };
+type ExtractionResponse = { transaction: Transaction; wallet_name?: string };
 type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; wallet_name?: string };
 type ApiError = Error & { status?: number; code?: string };
-
-const walletId = '4d6b3036-4290-4bde-aea4-375c779ef48b';
 
 export function ChatPage() {
   const queryClient = useQueryClient();
@@ -52,13 +50,14 @@ export function ChatPage() {
     try {
       const response = await api<ExtractionResponse>('/extractions/text', {
         method: 'POST',
-        body: JSON.stringify({ text: value, wallet_id: walletId, client_timezone: 'America/Lima' }),
+        body: JSON.stringify({ text: value, client_timezone: 'America/Lima' }),
       });
       setMessages((current) => [...current.slice(-48), {
         id: response.transaction.id,
         kind: 'confirmation',
         transaction: response.transaction,
-        walletName: 'BCP',
+        walletName: response.wallet_name ?? 'BCP',
+        idempotencyKey: crypto.randomUUID(),
         status: 'extracted',
       }]);
       setDraft('');
@@ -84,14 +83,21 @@ export function ChatPage() {
   }
 
   async function confirmTransaction(messageId: string, transaction: Transaction) {
+    const confirmation = messages.find((message) => message.kind === 'confirmation' && message.id === messageId);
+    if (!confirmation || confirmation.kind !== 'confirmation') return;
+    const idempotencyPayload = JSON.stringify(transaction);
+    const idempotencyKey = confirmation.idempotencyPayload === idempotencyPayload
+      ? confirmation.idempotencyKey
+      : crypto.randomUUID();
     setMessages((current) => current.map((message) => message.kind === 'confirmation' && message.id === messageId
-      ? { ...message, isSaving: true, saveError: undefined }
+      ? { ...message, idempotencyKey, idempotencyPayload, isSaving: true, saveError: undefined }
       : message));
     try {
       const response = await api<SaveResponse>('/transactions', {
         method: 'POST',
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
+          preview_id: messageId,
           type: transaction.type,
           amount: transaction.amount,
           currency: transaction.currency,
@@ -207,6 +213,7 @@ export function ChatPage() {
             kind: 'confirmation' as const,
             transaction: savedTransaction,
             walletName: response.wallet_name ?? 'Monedero',
+            idempotencyKey: crypto.randomUUID(),
             status: 'confirmed' as const,
           }
           : message);
