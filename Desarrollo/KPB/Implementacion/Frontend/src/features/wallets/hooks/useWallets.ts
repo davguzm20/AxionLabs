@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createWallet as createWalletRequest, getWallets, updateWallet as updateWalletRequest } from '../services/walletService';
-import type { CreateWalletPayload, UpdateWalletPayload, Wallet } from '../types/wallet.types';
+import { createWallet as createWalletRequest, getWallets } from '../services/walletService';
+import type { CreateWalletPayload, Wallet } from '../types/wallet.types';
 
 export function useWallets() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
@@ -32,32 +32,16 @@ export function useWallets() {
     setError(null);
     try {
       const wallet = await createWalletRequest(payload);
-      setWallets((current) => [...current, wallet]);
+      setWallets((current) => [...current, wallet.wallet]);
       return wallet;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'No se pudo crear el monedero.';
       setError(message);
-      throw cause;
+      return null;
     } finally {
       setSaving(false);
     }
   };
 
-  const update = async (id: string, payload: UpdateWalletPayload) => {
-    setSaving(true);
-    setError(null);
-    try {
-      const wallet = await updateWalletRequest(id, payload);
-      setWallets((current) => current.map((item) => item.id === id ? wallet : item));
-      return wallet;
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'No se pudo actualizar el monedero.';
-      setError(message);
-      throw cause;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return { wallets, loading, saving, error, clearError: () => setError(null), reload: loadWallets, create, update };
+  return { wallets, loading, saving, error, clearError: () => setError(null), reload: loadWallets, create };
 }

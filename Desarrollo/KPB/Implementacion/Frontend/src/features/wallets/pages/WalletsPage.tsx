@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { WalletCard } from '../components/WalletCard';
 import { WalletForm, type WalletFormValues } from '../components/WalletForm';
 import { useWallets } from '../hooks/useWallets';
-import type { Wallet } from '../types/wallet.types';
 
 function normalizeBalance(balance: string): string {
   const [whole = '0', fraction = ''] = balance.split('.');
@@ -11,60 +10,51 @@ function normalizeBalance(balance: string): string {
 }
 
 export function WalletsPage() {
-  const { wallets, loading, saving, error, clearError, reload, create, update } = useWallets();
+  const { wallets, loading, saving, error, clearError, reload, create } = useWallets();
   const [formOpen, setFormOpen] = useState(false);
-  const [editingWallet, setEditingWallet] = useState<Wallet | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showInfo, setShowInfo] = useState(true);
 
   const openCreate = () => {
     setSuccessMessage(null);
     clearError();
-    setEditingWallet(null);
-    setFormOpen(true);
-  };
-
-  const openEdit = (wallet: Wallet) => {
-    setSuccessMessage(null);
-    clearError();
-    setEditingWallet(wallet);
     setFormOpen(true);
   };
 
   const closeForm = () => {
     if (saving) return;
     setFormOpen(false);
-    setEditingWallet(null);
     clearError();
   };
 
   const submit = async (values: WalletFormValues) => {
-    if (editingWallet) {
-      await update(editingWallet.id, { name: values.name, balance: normalizeBalance(values.balance) });
-    } else {
-      await create({ name: values.name, type: values.type, currency: values.currency, balance: normalizeBalance(values.balance) });
-    }
-    setSuccessMessage(editingWallet ? 'Monedero actualizado.' : 'Monedero creado.');
+    const result = await create({ name: values.name, type: values.type, currency: values.currency, initial_balance: normalizeBalance(values.balance) });
+    if (!result) return;
+    const wallet = result.wallet;
+    const walletType = wallet.type === 'bank' ? 'banco' : 'efectivo';
+    const fallbackMessage = `Monedero “${wallet.name}” creado (${walletType}, ${wallet.currency}) con saldo inicial de S/ ${wallet.initial_balance ?? wallet.balance}.`;
+    setSuccessMessage(result.confirmation_message || fallbackMessage);
     setFormOpen(false);
-    setEditingWallet(null);
   };
 
   return (
     <>
-      <main className="h-full w-full overflow-y-auto bg-gray-50 px-4 pb-24 sm:px-6">
-        <div className="mx-auto w-full max-w-6xl">
-          <header className="sticky top-0 z-10 -mx-4 mb-4 flex h-[4.5rem] items-center border-b border-gray-200 bg-white px-4 sm:-mx-6 sm:px-6">
+      <main className="h-full w-full overflow-y-auto bg-bg px-4 pb-24 sm:px-6">
+        <header className="sticky top-0 z-10 -mx-4 mb-4 flex h-[4.5rem] items-center border-b border-ink-300 bg-white px-4 sm:-mx-6 sm:px-6">
+          <div className="mx-auto w-full max-w-6xl">
             <h1 className="font-semibold text-ink-900">Monederos</h1>
-          </header>
+          </div>
+        </header>
 
+        <div className="mx-auto w-full max-w-6xl">
           {showInfo && (
             <aside className="mb-4 flex items-start gap-3 rounded-xl border border-ink-300 bg-white p-4 shadow-sm">
               <Info aria-hidden="true" className="mt-0.5 shrink-0 text-brand-600" size={20} />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-ink-900">¿Cómo funciona un monedero?</p>
-                <p className="mt-1 text-sm leading-6 text-gray-600">Organiza por separado el dinero que tienes en tus cuentas bancarias y en efectivo.</p>
+                <p className="mt-1 text-sm leading-6 text-ink-500">Organiza por separado el dinero que tienes en tus cuentas bancarias y en efectivo.</p>
               </div>
-              <button type="button" aria-label="Cerrar información" onClick={() => setShowInfo(false)} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-ink-700 hover:bg-bg">
+              <button type="button" aria-label="Cerrar información" onClick={() => setShowInfo(false)} className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-ink-700 hover:bg-bg">
                 <X aria-hidden="true" size={18} />
               </button>
             </aside>
@@ -92,7 +82,7 @@ export function WalletsPage() {
             </section>
           ) : (
             <section aria-label="Lista de monederos">
-              {wallets.map((wallet) => <WalletCard key={wallet.id} wallet={wallet} onEdit={openEdit} />)}
+              {wallets.map((wallet) => <WalletCard key={wallet.id} wallet={wallet} />)}
             </section>
           )}
 
@@ -100,12 +90,12 @@ export function WalletsPage() {
             <p className="text-xs font-medium text-ink-500">No conecta cuentas ni mueve dinero real.</p>
           </div>
 
-          <button type="button" onClick={openCreate} className="mt-4 mb-8 flex min-h-11 w-full items-center justify-center rounded-xl bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">
+          <button type="button" onClick={openCreate} className="mt-4 mb-8 flex min-h-11 w-full items-center justify-center rounded-md bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">
             Nuevo monedero
           </button>
         </div>
       </main>
-      {formOpen && <WalletForm wallet={editingWallet} saving={saving} error={error} onClose={closeForm} onSubmit={submit} />}
+      {formOpen && <WalletForm saving={saving} error={error} onClose={closeForm} onSubmit={submit} />}
     </>
   );
 }
