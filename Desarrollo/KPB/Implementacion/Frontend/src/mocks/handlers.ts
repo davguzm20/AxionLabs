@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { CreateWalletPayload, Wallet } from '../features/wallets/types/wallet.types';
+import type { Wallet } from '../features/wallets/types/wallet.types';
 import type { Budget, BudgetCreatePayload, BudgetPeriodType, BudgetStatus, BudgetThreshold, Currency } from '../features/budgets/types/budget.types';
 
 type TransactionType = 'EXPENSE' | 'INCOME';
@@ -257,6 +257,20 @@ function sessionExpired() {
 function hasDuplicateWalletName(name: string, excludeId?: string): boolean {
   const normalizedName = name.trim().toLocaleLowerCase('es-PE');
   return savedWallets.some((wallet) => wallet.id !== excludeId && wallet.name.trim().toLocaleLowerCase('es-PE') === normalizedName);
+}
+
+function walletResponse(wallet: Wallet) {
+  const transactionCount = [...savedTransactions.values()].filter((transaction) => transaction.wallet_id === wallet.id).length;
+  return {
+    ...wallet,
+    type: wallet.type === 'bank' ? 'BANK' : 'CASH',
+    current_balance: wallet.balance,
+    // Keep this alias for older local consumers while the API contract moves to current_balance.
+    balance: wallet.balance,
+    status: wallet.status ?? 'ACTIVE',
+    has_transactions: transactionCount > 0,
+    transaction_count: transactionCount,
+  };
 }
 
 function amountToCents(amount: string): bigint {
@@ -769,11 +783,20 @@ export const handlers = [
   }),
   http.get('*/api/v1/wallets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
-    return HttpResponse.json({ data: savedWallets });
+    const status = new URL(request.url).searchParams.get('status');
+    const wallets = status ? savedWallets.filter((wallet) => (wallet.status ?? 'ACTIVE') === status) : savedWallets;
+    return HttpResponse.json({ data: wallets.map(walletResponse) });
+  }),
+  http.get('*/api/v1/wallets/:walletId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const wallet = savedWallets.find((item) => item.id === String(params.walletId));
+    return wallet
+      ? HttpResponse.json(walletResponse(wallet))
+      : HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
   }),
   http.post('*/api/v1/wallets', async ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
-    const body = await request.json() as Partial<CreateWalletPayload>;
+    const body = await request.json() as { name?: string; type?: string; currency?: string; initial_balance?: string };
     const name = body.name?.trim() ?? '';
     if (!name) {
       return HttpResponse.json(
@@ -781,13 +804,14 @@ export const handlers = [
         { status: 422 },
       );
     }
-    if (name.length > 40) {
+    if (name.length > 50) {
       return HttpResponse.json(
-        { error: { code: 'WALLET_NAME_TOO_LONG', message: 'El nombre debe tener 40 caracteres o menos.' } },
+        { error: { code: 'WALLET_NAME_TOO_LONG', message: 'El nombre debe tener 50 caracteres o menos.' } },
         { status: 422 },
       );
     }
-    if ((body.type !== 'bank' && body.type !== 'cash') || body.currency !== 'PEN') {
+    const type = body.type === 'BANK' || body.type === 'bank' ? 'bank' : body.type === 'CASH' || body.type === 'cash' ? 'cash' : null;
+    if (!type || (body.currency !== 'PEN' && body.currency !== 'USD')) {
       return HttpResponse.json(
         { error: { code: 'INVALID_WALLET_DATA', message: 'Selecciona un tipo de monedero y una moneda disponibles.' } },
         { status: 422 },
@@ -813,17 +837,67 @@ export const handlers = [
     const wallet: Wallet = {
       id: crypto.randomUUID(),
       name,
-      type: body.type,
+      type,
       currency: body.currency,
       initial_balance: initialBalance,
       balance: initialBalance,
-      is_default: savedWallets.length === 0,
+      is_default: !savedWallets.some((item) => item.status !== 'INACTIVE'),
+      status: 'ACTIVE',
     };
     savedWallets.push(wallet);
     return HttpResponse.json({
-      wallet,
-      confirmation_message: `Monedero “${wallet.name}” creado con saldo inicial de S/ ${wallet.initial_balance}.`,
+      wallet: walletResponse(wallet),
+      confirmation_message: `Monedero “${wallet.name}” creado con saldo inicial de ${wallet.currency === 'PEN' ? 'S/' : '$'} ${wallet.initial_balance}.`,
     }, { status: 201 });
+  }),
+  http.patch('*/api/v1/wallets/:walletId', async ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const wallet = savedWallets.find((item) => item.id === String(params.walletId));
+    if (!wallet) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
+    const body = await request.json() as { name?: string; type?: string; currency?: string; status?: string };
+    const name = body.name?.trim();
+    const nextType = body.type === undefined ? wallet.type : body.type === 'BANK' || body.type === 'bank' ? 'bank' : body.type === 'CASH' || body.type === 'cash' ? 'cash' : null;
+    if (name !== undefined && (!name || name.length > 50)) {
+      return HttpResponse.json({ error: { code: 'INVALID_WALLET_NAME', message: 'El nombre debe tener entre 1 y 50 caracteres.' } }, { status: 422 });
+    }
+    if (name && hasDuplicateWalletName(name, wallet.id)) {
+      return HttpResponse.json({ error: { code: 'WALLET_NAME_EXISTS', message: 'El nombre del monedero ya está en uso.' } }, { status: 409 });
+    }
+    if (!nextType || (body.currency !== undefined && body.currency !== 'PEN' && body.currency !== 'USD')) {
+      return HttpResponse.json({ error: { code: 'INVALID_WALLET_DATA', message: 'Selecciona un tipo de monedero y una moneda disponibles.' } }, { status: 422 });
+    }
+    const transactionCount = [...savedTransactions.values()].filter((transaction) => transaction.wallet_id === wallet.id).length;
+    if (body.currency && body.currency !== wallet.currency && transactionCount > 0) {
+      return HttpResponse.json({ error: { code: 'WALLET_HAS_TRANSACTIONS', message: 'No puedes cambiar la moneda de un monedero con movimientos.' } }, { status: 409 });
+    }
+    if (body.status === 'INACTIVE') {
+      if (wallet.is_default) return HttpResponse.json({ error: { code: 'WALLET_IS_DEFAULT', message: 'Primero marca otro monedero como predeterminado.' } }, { status: 409 });
+      if (savedWallets.filter((item) => item.status !== 'INACTIVE').length <= 1) return HttpResponse.json({ error: { code: 'LAST_WALLET', message: 'Debes tener al menos un monedero activo.' } }, { status: 409 });
+      wallet.status = 'INACTIVE';
+    }
+    if (body.status === 'ACTIVE') wallet.status = 'ACTIVE';
+    Object.assign(wallet, { ...(name ? { name } : {}), type: nextType, ...(body.currency ? { currency: body.currency } : {}) });
+    return HttpResponse.json(walletResponse(wallet));
+  }),
+  http.delete('*/api/v1/wallets/:walletId', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const index = savedWallets.findIndex((item) => item.id === String(params.walletId));
+    const wallet = savedWallets[index];
+    if (!wallet) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
+    if (wallet.is_default) return HttpResponse.json({ error: { code: 'WALLET_IS_DEFAULT', message: 'Primero marca otro monedero como predeterminado.' } }, { status: 409 });
+    if (savedWallets.filter((item) => item.status !== 'INACTIVE').length <= 1) return HttpResponse.json({ error: { code: 'LAST_WALLET', message: 'Debes tener al menos un monedero activo.' } }, { status: 409 });
+    const transactionCount = [...savedTransactions.values()].filter((transaction) => transaction.wallet_id === wallet.id).length;
+    if (transactionCount > 0) wallet.status = 'INACTIVE';
+    else savedWallets.splice(index, 1);
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.post('*/api/v1/wallets/:walletId/default', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const wallet = savedWallets.find((item) => item.id === String(params.walletId));
+    if (!wallet) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este monedero.' } }, { status: 404 });
+    if (wallet.status === 'INACTIVE') return HttpResponse.json({ error: { code: 'WALLET_INACTIVE', message: 'Reactiva el monedero antes de marcarlo como predeterminado.' } }, { status: 409 });
+    savedWallets.forEach((item) => { item.is_default = item.id === wallet.id; });
+    return HttpResponse.json(walletResponse(wallet));
   }),
   http.post('*/api/v1/categories/suggest', async ({ request }) => {
     const body = await request.json() as { type?: TransactionType; concept?: string };

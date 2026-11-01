@@ -1,21 +1,29 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createWallet as createWalletRequest, getWallets } from '../services/walletService';
-import type { CreateWalletPayload, Wallet } from '../types/wallet.types';
+import {
+  createWallet as createWalletRequest,
+  deleteWallet as deleteWalletRequest,
+  getWallets,
+  setDefaultWallet as setDefaultWalletRequest,
+  updateWallet as updateWalletRequest,
+} from '../services/walletService';
+import type { CreateWalletPayload, UpdateWalletPayload, Wallet } from '../types/wallet.types';
 
 export function useWallets() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [savingWalletId, setSavingWalletId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const loadWallets = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     try {
       setWallets(await getWallets(signal));
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') return;
-      setError(cause instanceof Error ? cause.message : 'No se pudieron cargar los monederos.');
+      setLoadError(cause instanceof Error ? cause.message : 'No se pudieron cargar los monederos.');
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -29,19 +37,61 @@ export function useWallets() {
 
   const create = async (payload: CreateWalletPayload) => {
     setSaving(true);
-    setError(null);
+    setActionError(null);
     try {
       const wallet = await createWalletRequest(payload);
       setWallets((current) => [...current, wallet.wallet]);
       return wallet;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'No se pudo crear el monedero.';
-      setError(message);
+      setActionError(message);
       return null;
     } finally {
       setSaving(false);
     }
   };
 
-  return { wallets, loading, saving, error, clearError: () => setError(null), reload: loadWallets, create };
+  const refreshWallets = async () => setWallets(await getWallets());
+
+  async function runWalletAction(id: string, action: () => Promise<unknown>): Promise<boolean> {
+    setSavingWalletId(id);
+    setActionError(null);
+    try {
+      await action();
+      await refreshWallets();
+      return true;
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'No se pudo actualizar el monedero.');
+      return false;
+    } finally {
+      setSavingWalletId(null);
+    }
+  }
+
+  const update = (id: string, payload: UpdateWalletPayload) => runWalletAction(id, () => updateWalletRequest(id, payload));
+  const markDefault = (id: string) => runWalletAction(id, () => setDefaultWalletRequest(id));
+  const deactivate = (id: string) => runWalletAction(id, () => deleteWalletRequest(id));
+  const reactivate = (id: string) => runWalletAction(id, () => updateWalletRequest(id, { status: 'ACTIVE' }));
+
+  const clearError = () => {
+    setLoadError(null);
+    setActionError(null);
+  };
+
+  return {
+    wallets,
+    loading,
+    saving,
+    savingWalletId,
+    loadError,
+    actionError,
+    error: actionError ?? loadError,
+    clearError,
+    reload: loadWallets,
+    create,
+    update,
+    markDefault,
+    deactivate,
+    reactivate,
+  };
 }

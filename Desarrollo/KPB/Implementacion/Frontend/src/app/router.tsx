@@ -9,6 +9,7 @@ import { NotFoundPage } from '../pages/NotFoundPage';
 import { ChatPage } from '../features/chat/ChatPage';
 import { ClassificationPage } from '../features/classification/pages/ClassificationPage';
 import { WalletsPage } from '../features/wallets/pages/WalletsPage';
+import { WalletFormPage } from '../features/wallets/pages/WalletFormPage';
 import { BudgetsPage } from '../features/budgets/pages/BudgetsPage';
 import { BudgetFormPage } from '../features/budgets/pages/BudgetFormPage';
 import { SettingsPage } from '../features/settings/pages/SettingsPage';
@@ -32,6 +33,8 @@ export function AppRoutes() {
           <Route path="/presupuestos/nuevo" element={<BudgetFormPage />} />
           <Route path="/presupuestos/:budgetId/editar" element={<BudgetFormPage />} />
           <Route path="/monederos" element={<WalletsPage />} />
+          <Route path="/monederos/nuevo" element={<WalletFormPage />} />
+          <Route path="/monederos/:walletId/editar" element={<WalletFormPage />} />
           <Route path="/ajustes" element={<SettingsPage />} />
           <Route path="/notificaciones" element={<NotificationsPage />} />
         </Route>
