@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { CreateWalletPayload, Wallet } from '../features/wallets/types/wallet.types';
 
 type TransactionType = 'EXPENSE' | 'INCOME';
 type MockCategory = { id: string; name: string; type: TransactionType; icon: string; source?: string };
@@ -27,7 +28,38 @@ const categoryCatalog: MockCategory[] = [
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
+const savedWallets: Wallet[] = [
+  {
+    id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
+    name: 'BCP',
+    type: 'bank',
+    currency: 'PEN',
+    balance: '185.00',
+    is_default: true,
+  },
+  {
+    id: 'wallet-cash-default',
+    name: 'Efectivo',
+    type: 'cash',
+    currency: 'PEN',
+    balance: '150.00',
+    is_default: false,
+  },
+];
 const today = () => new Date().toISOString().slice(0, 10);
+const hasSession = (request: Request) => request.headers.get('Authorization')?.startsWith('Bearer ') ?? false;
+
+function sessionExpired() {
+  return HttpResponse.json(
+    { error: { code: 'SESSION_EXPIRED', message: 'Inicia sesión para administrar tus monederos.' } },
+    { status: 401 },
+  );
+}
+
+function hasDuplicateWalletName(name: string, excludeId?: string): boolean {
+  const normalizedName = name.trim().toLocaleLowerCase('es-PE');
+  return savedWallets.some((wallet) => wallet.id !== excludeId && wallet.name.trim().toLocaleLowerCase('es-PE') === normalizedName);
+}
 
 function amountToCents(amount: string): bigint {
   const [whole = '0', fraction = '00'] = amount.split('.');
@@ -47,15 +79,64 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
   http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog.map((category) => ({ ...category, status: 'ACTIVE' })))),
-  http.get('*/api/v1/wallets', () => HttpResponse.json({
-    data: [{
-      id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
-      name: 'BCP',
-      currency: 'PEN',
-      is_default: true,
-      status: 'ACTIVE',
-    }],
-  })),
+  http.get('*/api/v1/wallets', ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    return HttpResponse.json({ data: savedWallets });
+  }),
+  http.post('*/api/v1/wallets', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const body = await request.json() as Partial<CreateWalletPayload>;
+    const name = body.name?.trim() ?? '';
+    if (!name) {
+      return HttpResponse.json(
+        { error: { code: 'WALLET_NAME_EMPTY', message: 'El nombre del monedero no puede estar vacío. Por favor, escoja un nombre apropiado.' } },
+        { status: 422 },
+      );
+    }
+    if (name.length > 40) {
+      return HttpResponse.json(
+        { error: { code: 'WALLET_NAME_TOO_LONG', message: 'El nombre debe tener 40 caracteres o menos.' } },
+        { status: 422 },
+      );
+    }
+    if ((body.type !== 'bank' && body.type !== 'cash') || body.currency !== 'PEN') {
+      return HttpResponse.json(
+        { error: { code: 'INVALID_WALLET_DATA', message: 'Selecciona un tipo de monedero y una moneda disponibles.' } },
+        { status: 422 },
+      );
+    }
+    if (hasDuplicateWalletName(name)) {
+      return HttpResponse.json(
+        { error: { code: 'WALLET_NAME_DUPLICATED', message: 'El nombre del monedero ya está en uso. Por favor, escoja un nombre distinto.' } },
+        { status: 409 },
+      );
+    }
+    const initialBalance = body.initial_balance ?? '0.00';
+    const balanceIsValid = typeof initialBalance === 'string'
+      && /^\d{1,8}(?:\.\d{1,2})?$/.test(initialBalance)
+      && BigInt(initialBalance.split('.')[0] ?? '0') <= 99_999_999n;
+    if (!balanceIsValid) {
+      return HttpResponse.json(
+        { error: { code: 'INVALID_INITIAL_BALANCE', message: 'El saldo inicial debe ser un monto válido mayor o igual a S/ 0.00.' } },
+        { status: 422 },
+      );
+    }
+
+    const wallet: Wallet = {
+      id: crypto.randomUUID(),
+      name,
+      type: body.type,
+      currency: body.currency,
+      initial_balance: initialBalance,
+      balance: initialBalance,
+      is_default: savedWallets.length === 0,
+    };
+    savedWallets.push(wallet);
+    return HttpResponse.json({
+      wallet,
+      confirmation_message: `Monedero “${wallet.name}” creado con saldo inicial de S/ ${wallet.initial_balance}.`,
+    }, { status: 201 });
+  }),
   http.post('*/api/v1/categories/suggest', async ({ request }) => {
     const body = await request.json() as { type?: TransactionType; concept?: string };
     const type = body.type ?? 'EXPENSE';

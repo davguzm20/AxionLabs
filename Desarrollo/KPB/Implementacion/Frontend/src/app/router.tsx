@@ -9,6 +9,7 @@ import { NotFoundPage } from '../pages/NotFoundPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { ChatPage } from '../features/chat/ChatPage';
 import { ClassificationPage } from '../features/classification/pages/ClassificationPage';
+import { WalletsPage } from '../features/wallets/pages/WalletsPage';
 
 export function AppRoutes() {
   return (
@@ -23,7 +24,7 @@ export function AppRoutes() {
           <Route path="/inicio" element={<ChatPage />} />
           <Route path="/clasificar" element={<ClassificationPage />} />
           <Route path="/historial" element={<PlaceholderPage title="Historial" />} />
-          <Route path="/monederos" element={<PlaceholderPage title="Monederos" />} />
+          <Route path="/monederos" element={<WalletsPage />} />
           <Route path="/ajustes" element={<PlaceholderPage title="Ajustes" />} />
         </Route>
       </Route>
