@@ -1,16 +1,53 @@
 import { http, HttpResponse } from 'msw';
 
+type TransactionType = 'EXPENSE' | 'INCOME';
+type MockCategory = { id: string; name: string; type: TransactionType; icon: string; source?: string };
+type MockTransaction = {
+  id: string;
+  type: TransactionType;
+  amount: string;
+  currency: string;
+  concept: string;
+  transaction_date: string;
+  wallet_id: string;
+  category: MockCategory;
+  source: 'TEXT' | 'MANUAL';
+};
+
+const categoryCatalog: MockCategory[] = [
+  { id: 'category-food', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
+  { id: 'category-transport', name: 'Transporte', type: 'EXPENSE', icon: 'bus' },
+  { id: 'category-health', name: 'Salud', type: 'EXPENSE', icon: 'heart-pulse' },
+  { id: 'category-other', name: 'Otros', type: 'EXPENSE', icon: 'circle-help' },
+  { id: 'category-salary', name: 'Sueldo', type: 'INCOME', icon: 'wallet' },
+  { id: 'category-freelance', name: 'Freelance', type: 'INCOME', icon: 'laptop' },
+  { id: 'category-sales', name: 'Ventas', type: 'INCOME', icon: 'store' },
+  { id: 'category-other-income', name: 'Otros', type: 'INCOME', icon: 'circle-help' },
+  { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
+];
+
+const savedTransactions = new Map<string, MockTransaction>();
+const today = () => new Date().toISOString().slice(0, 10);
+
+function amountToCents(amount: string): bigint {
+  const [whole = '0', fraction = '00'] = amount.split('.');
+  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+}
+
+function findSuggestedCategory(type: TransactionType, concept: string): MockCategory {
+  const normalized = concept.toLocaleLowerCase('es-PE');
+  const patterns = type === 'INCOME'
+    ? [[/sueldo|salario|planilla/, 'category-salary'], [/freelance|servicio/, 'category-freelance'], [/venta|vend[ií]/, 'category-sales']]
+    : [[/caf[eé]|almuerzo|cena|comida|men[uú]|restaurante/, 'category-food'], [/taxi|bus|pasaje|metro|transporte/, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
+  const matchedId = patterns.find(([pattern]) => (pattern as RegExp).test(normalized))?.[1] as string | undefined;
+  const fallbackId = type === 'INCOME' ? 'category-other-income' : 'category-other';
+  return categoryCatalog.find(({ id }) => id === (matchedId ?? fallbackId)) ?? categoryCatalog[0]!;
+}
+
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
-  http.get('*/categories', () => HttpResponse.json({
-    data: [
-      { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils', status: 'ACTIVE' },
-      { id: 'c815c08e-0300-4c4a-a4f0-9d6747347f09', name: 'Transporte', type: 'EXPENSE', icon: 'car', status: 'ACTIVE' },
-      { id: 'd7a27763-e456-483f-8853-1506421e21db', name: 'Otros', type: 'EXPENSE', icon: 'shapes', status: 'ACTIVE' },
-      { id: 'fb9babf0-b268-4bde-9dc5-7f8953012bc6', name: 'Ingresos', type: 'INCOME', icon: 'briefcase', status: 'ACTIVE' },
-    ],
-  })),
-  http.get('*/wallets', () => HttpResponse.json({
+  http.get('*/api/v1/categories', () => HttpResponse.json(categoryCatalog.map((category) => ({ ...category, status: 'ACTIVE' })))),
+  http.get('*/api/v1/wallets', () => HttpResponse.json({
     data: [{
       id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
       name: 'BCP',
@@ -19,55 +56,127 @@ export const handlers = [
       status: 'ACTIVE',
     }],
   })),
-  http.post('*/transactions/text', async ({ request }) => {
-    const body = await request.json() as { text?: string };
-    const text = body.text ?? '';
-    if (/falla/i.test(text)) {
-      return HttpResponse.json({
-        error: { code: 'NLP_UNAVAILABLE', message: 'El servicio no está disponible. Por favor intente nuevamente.' },
-      }, { status: 503 });
-    }
-    if (!body.text?.match(/\d/)) {
+  http.post('*/api/v1/categories/suggest', async ({ request }) => {
+    const body = await request.json() as { type?: TransactionType; concept?: string };
+    const type = body.type ?? 'EXPENSE';
+    const category = findSuggestedCategory(type, body.concept ?? '');
+    const isFallback = category.name === 'Otros';
+
+    return HttpResponse.json({
+      category,
+      confidence: isFallback ? 0.3 : 0.94,
+      reason: isFallback ? 'No se encontró una coincidencia clara.' : 'El concepto coincide con esta categoría.',
+      needs_review: isFallback,
+    });
+  }),
+  http.post('*/extractions/text', async ({ request }) => {
+    const body = await request.json() as { text?: string; wallet_id?: string };
+    const text = body.text?.trim() ?? '';
+    const amountMatch = text.match(/\d+(?:[.,]\d{1,2})?/);
+    if (!amountMatch) {
       return HttpResponse.json({ error: { code: 'AMOUNT_NOT_FOUND', message: 'No se encontró un monto.' } }, { status: 422 });
     }
 
-    const amountMatch = text.match(/\d+(?:[.,]\d{1,2})?/);
-    const rawAmount = amountMatch?.[0].replace(',', '.') ?? '15';
-    const [wholeAmount, decimalAmount = ''] = rawAmount.split('.');
-    const amount = `${wholeAmount}.${decimalAmount.padEnd(2, '0')}`;
-    const isExceeded = /excedido/i.test(text);
-    const hasAlert = /alerta/i.test(text);
-    const botMood = isExceeded ? 'sad' : hasAlert ? 'surprised' : 'happy';
-    const alert = isExceeded
-      ? { message: 'Excediste el tope de Alimentación.', severity: 'danger' }
-      : hasAlert
-        ? { message: 'Alcanzaste el 80% de tu presupuesto de Alimentación.', severity: 'warning' }
-        : undefined;
-    const isMenu = /men[uú]|pan/i.test(text);
+    const amount = amountMatch[0].replace(',', '.');
+    const [whole, fraction = ''] = amount.split('.');
+    const normalizedAmount = `${whole}.${fraction.padEnd(2, '0')}`;
+    const type: TransactionType = /pagaron|ingreso|recib[ií]|sueldo|freelance|vend[ií]/i.test(text) ? 'INCOME' : 'EXPENSE';
+    const concept = /^\s*\d+(?:[.,]\d{1,2})?\s*$/.test(text)
+      ? 'Gasto general'
+      : text.match(/(?:en|por|de)\s+(.+)$/i)?.[1]?.trim() || text.replace(amountMatch[0], '').trim() || 'Sin concepto';
+    const category = findSuggestedCategory(type, concept);
+
     return HttpResponse.json({
-      botMood,
       transaction: {
-        id: '8c9c1af0-4ca8-4fc4-8c90-d87bc00f4345',
-        type: /pagaron|ingreso|recib[ií]/i.test(text) ? 'INCOME' : 'EXPENSE',
-        amount,
+        id: crypto.randomUUID(),
+        type,
+        amount: normalizedAmount,
         currency: 'PEN',
-        concept: isMenu ? 'Menú' : 'Sin concepto',
-        transaction_date: new Date().toISOString().slice(0, 10),
-        wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
-        category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: isMenu ? 'Alimentación' : 'Otros', icon: isMenu ? 'utensils' : 'shapes' },
-        source: 'TEXT',
-        category_confidence: isMenu ? 0.94 : 0.5,
-        needs_review: !isMenu,
+        concept,
+        transaction_date: today(),
+        wallet_id: body.wallet_id ?? '4d6b3036-4290-4bde-aea4-375c779ef48b',
+        category,
       },
-      wallet_balance: '185.00',
-      alerts: alert ? [alert] : [],
-      message: isExceeded
-        ? 'Excediste el tope de Alimentación.'
-        : `Registré S/ ${amount} en ${isMenu ? 'Alimentación' : 'Otros'}. Si algo no está bien, puedes corregirlo.`,
-      wallet_name: 'BCP',
-    }, { status: 201 });
+    });
   }),
-  http.post('*/transactions/voice', async ({ request }) => {
+  http.post('*/transactions', async ({ request }) => {
+    const body = await request.json() as {
+      type: TransactionType;
+      amount: string;
+      currency: string;
+      concept: string;
+      transaction_date: string;
+      wallet_id: string;
+      category_id: string;
+      original_text?: string;
+    };
+    const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type);
+    if (!category) {
+      return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.' } }, { status: 422 });
+    }
+
+    const transaction: MockTransaction = {
+      id: crypto.randomUUID(),
+      type: body.type,
+      amount: body.amount,
+      currency: body.currency,
+      concept: body.concept,
+      transaction_date: body.transaction_date,
+      wallet_id: body.wallet_id,
+      category,
+      source: 'TEXT',
+    };
+    savedTransactions.set(transaction.id, transaction);
+    const originalText = body.original_text ?? body.concept;
+    const isExceeded = /excedido/i.test(originalText);
+    const amountInCents = amountToCents(body.amount);
+    let budgetAlert: {
+      priority: 'high' | 'normal';
+      threshold_percentage: number;
+      usage_percentage: number;
+      message: string;
+    } | null = null;
+    if (amountInCents > 40000n || isExceeded) {
+      budgetAlert = {
+        priority: 'high',
+        threshold_percentage: 100,
+        usage_percentage: 105.0,
+        message: `Superaste tu tope de S/ 500.00 en ${category.name}. Llevas gastado S/ 525.00.`,
+      };
+    } else if (amountInCents > 20000n || /alerta/i.test(originalText)) {
+      budgetAlert = {
+        priority: 'normal',
+        threshold_percentage: 80,
+        usage_percentage: 80.0,
+        message: `Alcanzaste el 80% de tu presupuesto de ${category.name}.`,
+      };
+    }
+
+    return HttpResponse.json({ transaction, budget_alert: budgetAlert }, { status: 201 });
+  }),
+  http.patch('*/transactions/:id', async ({ params, request }) => {
+    const transactionId = String(params.id);
+    const existingTransaction = savedTransactions.get(transactionId);
+    if (!existingTransaction) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró la transacción.' } }, { status: 404 });
+    }
+
+    const body = await request.json() as { category_id?: string; concept?: string };
+    const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === existingTransaction.type);
+    if (body.category_id && !category) {
+      return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.' } }, { status: 422 });
+    }
+
+    const updatedTransaction: MockTransaction = {
+      ...existingTransaction,
+      ...(body.concept ? { concept: body.concept } : {}),
+      ...(category ? { category: { ...category, source: 'manual' } } : {}),
+      source: 'MANUAL',
+    };
+    savedTransactions.set(transactionId, updatedTransaction);
+    return HttpResponse.json(updatedTransaction);
+  }),
+  http.post('*/api/v1/transactions/voice', async ({ request }) => {
     const body = await request.formData();
     const audio = body.get('audio');
     if (!(audio instanceof File)) {
@@ -92,11 +201,11 @@ export const handlers = [
       },
       confidence: 0.92,
       requires_confirmation: true,
-    }, { status: 200 });
+    });
   }),
-  http.post('*/transactions/voice/confirm', async ({ request }) => {
+  http.post('*/api/v1/transactions/voice/confirm', async ({ request }) => {
     const body = await request.json() as {
-      type: 'EXPENSE' | 'INCOME';
+      type: TransactionType;
       amount: string;
       currency: string;
       concept: string;
@@ -104,11 +213,8 @@ export const handlers = [
       category_id: string;
       wallet_id: string;
     };
-    const categoryName = body.category_id === 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'
-      ? 'Alimentación'
-      : body.category_id === 'c815c08e-0300-4c4a-a4f0-9d6747347f09'
-        ? 'Transporte'
-        : body.type === 'INCOME' ? 'Ingresos' : 'Otros';
+    const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
+      ?? findSuggestedCategory(body.type, '');
     return HttpResponse.json({
       transaction: {
         id: 'voice-transaction-20261030-001',
@@ -118,14 +224,13 @@ export const handlers = [
         concept: body.concept,
         transaction_date: body.transaction_date,
         wallet_id: body.wallet_id,
-        category: { id: body.category_id, name: categoryName, icon: 'circle-help', type: body.type },
+        category: { id: body.category_id, name: category.name, icon: category.icon },
       },
       wallet_name: 'BCP',
-      wallet_balance: '170.00',
       alerts: [],
     }, { status: 201 });
   }),
-  http.post('*/transactions/receipt', async ({ request }) => {
+  http.post('*/api/v1/transactions/receipt', async ({ request }) => {
     const body = await request.formData();
     const image = body.get('image');
     if (!(image instanceof File)) {
@@ -150,11 +255,11 @@ export const handlers = [
       },
       confidence: 0.88,
       requires_confirmation: true,
-    }, { status: 200 });
+    });
   }),
-  http.post('*/transactions/receipt/confirm', async ({ request }) => {
+  http.post('*/api/v1/transactions/receipt/confirm', async ({ request }) => {
     const body = await request.json() as {
-      type: 'EXPENSE' | 'INCOME';
+      type: TransactionType;
       amount: string;
       currency: string;
       concept: string;
@@ -162,11 +267,8 @@ export const handlers = [
       category_id: string;
       wallet_id: string;
     };
-    const categoryName = body.category_id === 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'
-      ? 'Alimentación'
-      : body.category_id === 'c815c08e-0300-4c4a-a4f0-9d6747347f09'
-        ? 'Transporte'
-        : body.type === 'INCOME' ? 'Ingresos' : 'Otros';
+    const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type)
+      ?? findSuggestedCategory(body.type, '');
     return HttpResponse.json({
       transaction: {
         id: 'receipt-transaction-20261031-001',
@@ -176,10 +278,9 @@ export const handlers = [
         concept: body.concept,
         transaction_date: body.transaction_date,
         wallet_id: body.wallet_id,
-        category: { id: body.category_id, name: categoryName, icon: 'circle-help', type: body.type },
+        category: { id: body.category_id, name: category.name, icon: category.icon },
       },
       wallet_name: 'BCP',
-      wallet_balance: '124.10',
       alerts: [],
     }, { status: 201 });
   }),

@@ -13,7 +13,11 @@ type TransactionPreviewCardProps = {
   onCancel: () => void;
 };
 
-type ListResponse<T> = { data: T[] };
+type ListResponse<T> = { data: T[] } | T[];
+
+function responseItems<T>(response: ListResponse<T>): T[] {
+  return Array.isArray(response) ? response : response.data;
+}
 
 function initialDraft(preview: TransactionPreview): TransactionDraft {
   const extracted = preview.extracted;
@@ -62,11 +66,13 @@ export function TransactionPreviewCard({
       api<ListResponse<WalletChoice>>('/wallets?status=ACTIVE'),
     ]).then(([categoryResponse, walletResponse]) => {
       if (!active) return;
-      setCategories(categoryResponse.data);
-      setWallets(walletResponse.data);
+      const categoryItems = responseItems(categoryResponse);
+      const walletItems = responseItems(walletResponse);
+      setCategories(categoryItems);
+      setWallets(walletItems);
       setDraft((current) => {
-        if (current.wallet_id || walletResponse.data.length === 0) return current;
-        const defaultWallet = walletResponse.data.find((wallet) => wallet.is_default) ?? walletResponse.data[0];
+        if (current.wallet_id || walletItems.length === 0) return current;
+        const defaultWallet = walletItems.find((wallet) => wallet.is_default) ?? walletItems[0];
         return { ...current, wallet_id: defaultWallet.id };
       });
     }).catch(() => {
