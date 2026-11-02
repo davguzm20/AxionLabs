@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, CheckCircle2, LoaderCircle, Pencil, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { api } from '../../../lib/api';
 import { getCategories } from '../../classification/services/classificationService';
@@ -101,10 +102,10 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
         </h2>
         <p className="mt-2 text-2xl font-bold text-brand-700">{currentTransaction.currency === 'PEN' ? 'S/' : '$'} {currentTransaction.amount}</p>
         <dl className="mt-3 space-y-1 text-sm text-ink-700">
-          <div className="flex justify-between gap-4"><dt>Concepto</dt><dd className="text-right">{currentTransaction.concept}</dd></div>
-          <div className="flex justify-between gap-4"><dt>Categoría</dt><dd className="text-right">{currentTransaction.category.name}</dd></div>
-          <div className="flex justify-between gap-4"><dt>Monedero</dt><dd className="text-right">{walletName}</dd></div>
-          <div className="flex justify-between gap-4"><dt>Fecha</dt><dd className="text-right">{date}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Concepto</dt><dd className="min-w-0 max-w-[65%] break-words text-right [overflow-wrap:anywhere]">{currentTransaction.concept}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Categoría</dt><dd className="min-w-0 max-w-[65%] break-words text-right [overflow-wrap:anywhere]">{currentTransaction.category.name}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Monedero</dt><dd className="min-w-0 max-w-[65%] break-words text-right [overflow-wrap:anywhere]">{walletName}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Fecha</dt><dd className="min-w-0 max-w-[65%] break-words text-right [overflow-wrap:anywhere]">{date}</dd></div>
         </dl>
         {success && <p role="status" className="mt-3 flex items-center gap-2 text-sm font-medium text-green-700"><CheckCircle2 aria-hidden="true" size={18} /> Categoría actualizada.</p>}
         {status === 'extracted' ? (
@@ -123,8 +124,8 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
           </div>
         )}
       </section>
-      {isEditorOpen && status === 'extracted' && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink-900/50 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingCategory && !isAccepting) setIsEditorOpen(false); }}>
+      {isEditorOpen && status === 'extracted' && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingCategory && !isAccepting) setIsEditorOpen(false); }}>
           <section role="dialog" aria-modal="true" aria-labelledby={`edit-category-title-${currentTransaction.id}`} className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-t-xl bg-white p-5 shadow-lg sm:rounded-xl">
             <div className="flex items-center justify-between gap-3">
               <h3 id={`edit-category-title-${currentTransaction.id}`} className="text-lg font-semibold text-ink-900">Editar categoría</h3>
@@ -164,7 +165,8 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
               </button>
             </div>
           </section>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

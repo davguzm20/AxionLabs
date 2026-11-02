@@ -1,4 +1,5 @@
 import {
+  BellRing,
   BookOpen,
   BusFront,
   CircleHelp,
@@ -30,6 +31,7 @@ const categoryIcons: Record<string, LucideIcon> = {
 interface BudgetCardProps {
   budget: Budget;
   onEdit: (budget: Budget) => void;
+  onConfigureAlerts: (budget: Budget) => void;
   onDeactivate: (budget: Budget) => void;
   onReactivate: (budget: Budget) => void;
   busy?: boolean;
@@ -58,7 +60,7 @@ function getProgressState(percentage: number): { label: string; color: string } 
   return { label: 'Vas bien', color: 'bg-brand-500' };
 }
 
-export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = false }: BudgetCardProps) {
+export function BudgetCard({ budget, onEdit, onConfigureAlerts, onDeactivate, onReactivate, busy = false }: BudgetCardProps) {
   const Icon = categoryIcons[budget.category.name.toLocaleLowerCase('es-PE')] ?? CircleHelp;
   const percentage = Math.max(0, budget.percentage);
   const state = getProgressState(percentage);
@@ -80,6 +82,14 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = 
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            aria-label={`Configurar alertas para ${budget.category.name}`}
+            onClick={() => onConfigureAlerts(budget)}
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-teal-700 hover:bg-teal-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-600"
+          >
+            <BellRing aria-hidden="true" size={19} />
+          </button>
           {!isInactive && (
             <>
               <button

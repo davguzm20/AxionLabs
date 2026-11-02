@@ -96,7 +96,7 @@ export function BudgetsPage() {
             <h2 className="font-medium capitalize text-ink-900">{getCurrentMonthLabel()}</h2>
             <p className="text-xs text-ink-500">El consumo se reinicia al comenzar cada periodo.</p>
           </div>
-          <div className="flex rounded-lg bg-white p-1" aria-label="Filtrar presupuestos">
+          <div className="flex rounded-lg border border-ink-300 bg-white p-1" aria-label="Filtrar presupuestos">
             {(['ACTIVE', 'INACTIVE'] as const).map((value) => {
               const selected = status === value;
               return (
@@ -109,7 +109,7 @@ export function BudgetsPage() {
                     setActionError(undefined);
                     setNotice(undefined);
                   }}
-                  className={`min-h-10 rounded-md px-3 text-sm font-medium ${selected ? 'bg-accent-600 text-white' : 'text-ink-700 hover:bg-bg'}`}
+                  className={`min-h-10 rounded-md px-3 text-sm font-medium transition-colors ${selected ? 'bg-brand-600 text-white' : 'text-ink-700 hover:bg-teal-50 hover:text-teal-700'}`}
                 >
                   {value === 'ACTIVE' ? 'Activos' : 'Inactivos'}
                 </button>
@@ -155,6 +155,7 @@ export function BudgetsPage() {
                 budget={budget}
                 busy={busy}
                 onEdit={(item) => navigate(`/presupuestos/${encodeURIComponent(item.id)}/editar`)}
+                onConfigureAlerts={(item) => navigate(`/presupuestos/${encodeURIComponent(item.id)}/editar`)}
                 onDeactivate={(item) => void handleDeactivate(item)}
                 onReactivate={(item) => void handleReactivate(item)}
               />
