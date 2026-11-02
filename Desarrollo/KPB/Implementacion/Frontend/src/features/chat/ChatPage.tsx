@@ -18,10 +18,9 @@ import { NotificationBell } from '../notifications/components/NotificationBell';
 type ChatMessage =
   | { id: string; kind: 'bubble'; author: 'bot' | 'user'; text: string; botMood?: BotMood }
   | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string; idempotencyKey: string; idempotencyPayload?: string; status: TransactionStatus; isSaving?: boolean; saveError?: string }
-  | { id: string; kind: 'preview'; source: 'VOICE' | 'RECEIPT'; preview: TransactionPreview; imageFile?: File; isSaving?: boolean; saveError?: string }
+  | { id: string; kind: 'preview'; source: 'TEXT' | 'VOICE' | 'RECEIPT'; preview: TransactionPreview; suggestedCategoryId?: string; imageFile?: File; isSaving?: boolean; saveError?: string }
   | { id: string; kind: 'alert'; alert: BudgetAlert };
-type ExtractionResponse = { transaction: Transaction; wallet_name?: string };
-type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; wallet_name?: string };
+type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; budget_alert?: BudgetAlert; wallet_name?: string };
 type ApiError = Error & { status?: number; code?: string };
 
 export function ChatPage() {
@@ -35,10 +34,13 @@ export function ChatPage() {
   const [retryText, setRetryText] = useState<string>();
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const previewIdempotencyKeys = useRef(new Map<string, string>());
 
   useEffect(() => {
-    if (!sending) requestAnimationFrame(() => inputRef.current?.focus());
-  }, [sending]);
+    if (sending || voiceRecorderOpen) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [sending, messages.length, voiceRecorderOpen]);
 
   async function sendText(text: string) {
     const value = text.trim();
@@ -46,34 +48,29 @@ export function ChatPage() {
 
     setMessages((current) => [...current.slice(-48), { id: crypto.randomUUID(), kind: 'bubble', author: 'user', text: value }]);
     setSending(true);
-    setRetryText(value);
+    setRetryText(undefined);
     try {
-      const response = await api<ExtractionResponse>('/extractions/text', {
+      const preview = await api<TransactionPreview>('/extractions/text', {
         method: 'POST',
         body: JSON.stringify({ text: value, client_timezone: 'America/Lima' }),
       });
-      setMessages((current) => [...current.slice(-48), {
-        id: response.transaction.id,
-        kind: 'confirmation',
-        transaction: response.transaction,
-        walletName: response.wallet_name ?? 'BCP',
-        idempotencyKey: crypto.randomUUID(),
-        status: 'extracted',
-      }]);
-      setDraft('');
-      setRetryText(undefined);
+      setMessages((current) => [...current.slice(-48), { id: preview.preview_id, kind: 'preview', source: 'TEXT', preview, suggestedCategoryId: preview.extracted.category.id }]);
     } catch (error) {
       const apiError = error as ApiError;
-      const message = apiError.code === 'AMOUNT_NOT_FOUND'
-        ? 'No pude identificar el monto. ¿Cuánto fue el gasto/ingreso?'
-        : 'No pude extraer los datos. Inténtalo nuevamente.';
+      const isMissingAmount = apiError.code === 'AMOUNT_NOT_DETECTED';
+      const message = isMissingAmount
+        ? 'No pude identificar el monto. \u00bfCu\u00e1nto fue el gasto/ingreso?'
+        : apiError.code === 'NLP_UNAVAILABLE'
+          ? 'El servicio no est\u00e1 disponible. Int\u00e9ntalo nuevamente.'
+          : apiError.message || 'No pude registrar la transacci\u00f3n. Int\u00e9ntalo nuevamente.';
       setMessages((current) => [...current.slice(-49), {
         id: crypto.randomUUID(),
         kind: 'bubble',
         author: 'bot',
         text: message,
-        botMood: apiError.code === 'AMOUNT_NOT_FOUND' ? 'surprised' : 'sad',
+        botMood: 'sad',
       }]);
+      if (apiError.code === 'NLP_UNAVAILABLE') setRetryText(value);
     } finally {
       setSending(false);
       requestAnimationFrame(() => {
@@ -187,16 +184,35 @@ export function ChatPage() {
     }
   }
 
-  async function confirmPreview(messageId: string, source: 'VOICE' | 'RECEIPT', transactionDraft: TransactionDraft) {
+  async function confirmPreview(messageId: string, source: 'TEXT' | 'VOICE' | 'RECEIPT', transactionDraft: TransactionDraft) {
     setMessages((current) => current.map((message) => message.kind === 'preview' && message.id === messageId
       ? { ...message, isSaving: true, saveError: undefined }
       : message));
     try {
       const preview = messages.find((message) => message.kind === 'preview' && message.id === messageId);
       if (!preview || preview.kind !== 'preview') return;
-      const response = source === 'VOICE'
-        ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft)
-        : await confirmReceiptPreview(preview.preview.preview_id, transactionDraft, preview.preview.ocr_text);
+      const idempotencyKey = previewIdempotencyKeys.current.get(messageId) ?? crypto.randomUUID();
+      previewIdempotencyKeys.current.set(messageId, idempotencyKey);
+      const response = source === 'TEXT'
+        ? await api<SaveResponse>('/transactions', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': idempotencyKey },
+          body: JSON.stringify({
+            preview_id: preview.preview.preview_id,
+            type: transactionDraft.type.toLocaleLowerCase(),
+            amount: transactionDraft.amount,
+            currency: transactionDraft.currency,
+            concept: transactionDraft.concept,
+            occurred_at: `${transactionDraft.transaction_date}T12:00:00-05:00`,
+            wallet_id: transactionDraft.wallet_id,
+            category_id: transactionDraft.category_id,
+            source: 'text',
+            category_source: transactionDraft.category_id === preview.suggestedCategoryId ? 'suggested' : 'manual',
+          }),
+        })
+        : source === 'VOICE'
+          ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft)
+          : await confirmReceiptPreview(preview.preview.preview_id, transactionDraft, preview.preview.ocr_text);
       const savedTransaction: Transaction = {
         ...response.transaction,
         category: {
@@ -206,6 +222,11 @@ export function ChatPage() {
       };
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      void queryClient.invalidateQueries({ queryKey: ['wallets'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      const budgetAlert = 'budget_alert' in response ? response.budget_alert : undefined;
+      previewIdempotencyKeys.current.delete(messageId);
       setMessages((current) => {
         const next = current.map((message) => message.kind === 'preview' && message.id === messageId
           ? {
@@ -217,9 +238,10 @@ export function ChatPage() {
             status: 'confirmed' as const,
           }
           : message);
-        if (response.alerts?.length) {
+        const alerts = [...(response.alerts ?? []), ...(budgetAlert ? [budgetAlert] : [])];
+        if (alerts.length) {
           const index = next.findIndex((message) => message.id === messageId);
-          next.splice(index + 1, 0, ...response.alerts.map((alert) => ({
+          next.splice(index + 1, 0, ...alerts.map((alert) => ({
             id: crypto.randomUUID(),
             kind: 'alert' as const,
             alert,
@@ -233,19 +255,6 @@ export function ChatPage() {
         ? { ...message, isSaving: false, saveError: messageText }
         : message));
     }
-  }
-
-  function cancelPreview(messageId: string) {
-    setMessages((current) => {
-      const selected = current.find((message) => message.kind === 'preview' && message.id === messageId);
-      if (!selected || selected.kind !== 'preview') return current;
-      if (selected.source === 'VOICE' && selected.preview.transcript) {
-        return current.map((message) => message.id === messageId
-          ? { id: messageId, kind: 'bubble' as const, author: 'user' as const, text: selected.preview.transcript ?? '' }
-          : message);
-      }
-      return current.filter((message) => message.id !== messageId);
-    });
   }
 
   return (
@@ -281,8 +290,10 @@ export function ChatPage() {
                 imageFile={message.imageFile}
                 isSaving={message.isSaving ?? false}
                 saveError={message.saveError}
+                onEdit={(updatedDraft, category) => setMessages((current) => current.map((item) => item.kind === 'preview' && item.id === message.id
+                  ? { ...item, preview: { ...item.preview, extracted: { ...item.preview.extracted, amount: updatedDraft.amount, concept: updatedDraft.concept, category } } }
+                  : item))}
                 onConfirm={(transactionDraft) => void confirmPreview(message.id, message.source, transactionDraft)}
-                onCancel={() => cancelPreview(message.id)}
               />
               : <AlertCard key={message.id} alert={message.alert} />)}
         {sending && <div className="flex items-center gap-2 text-sm text-ink-500" role="status"><img src="/logo.png" alt="" className="h-8 w-8 rounded-full" />KhipuBot está preparando la transacción…</div>}

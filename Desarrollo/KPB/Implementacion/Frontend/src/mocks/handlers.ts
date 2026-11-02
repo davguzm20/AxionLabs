@@ -47,6 +47,7 @@ const categoryCatalog: MockCategory[] = [
 ];
 
 const savedTransactions = new Map<string, MockTransaction>();
+const savedTextResponses = new Map<string, unknown>();
 let savedNotifications: MockNotification[] = [];
 let savedPreferences = { main_currency: 'PEN' as const, email_notifications: true };
 const notificationSubscribers = new Set<(event: NotificationEvent) => void>();
@@ -72,7 +73,7 @@ const savedWallets: Wallet[] = mockWalletSeeds.map((wallet) => ({ ...wallet }));
 const MOCK_TODAY = new Date();
 const mockBudgetSeeds = [
   {
-    id: 'budget-food', categoryId: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', currency: 'PEN' as const, amount: '500.00', consumed: '410.80', periodType: 'MONTHLY' as const, thresholds: [80],
+    id: 'budget-food', categoryId: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', currency: 'PEN' as const, amount: '250.00', consumed: '0.00', periodType: 'MONTHLY' as const, thresholds: [80, 100],
   },
   {
     id: 'budget-transport', categoryId: 'category-transport', currency: 'PEN' as const, amount: '60.00', consumed: '69.80', periodType: 'MONTHLY' as const, thresholds: [80, 100],
@@ -232,6 +233,7 @@ resetSavedTransactions();
 
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
+  savedTextResponses.clear();
   resetCu08ThresholdConfigs();
   resetSavedTransactions();
   savedWallets.splice(0, savedWallets.length, ...mockWalletSeeds.map((wallet) => ({ ...wallet })));
@@ -955,48 +957,65 @@ export const handlers = [
       needs_review: isFallback,
     });
   }),
-  http.post('*/extractions/text', async ({ request }) => {
-    const body = await request.json() as { text?: string; wallet_id?: string };
+  http.post('*/api/v1/extractions/text', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const body = await request.json() as { text?: string; wallet_id?: string; client_timezone?: string };
     const text = body.text?.trim() ?? '';
-    const amountMatch = text.match(/\d+(?:[.,]\d{1,2})?/);
-    if (!amountMatch) {
-      return HttpResponse.json({ error: { code: 'AMOUNT_NOT_FOUND', message: 'No se encontró un monto.' } }, { status: 422 });
+    if (/falla/iu.test(text)) {
+      return HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'El servicio no esta disponible. Intenta nuevamente.' } }, { status: 503 });
+    }
+    const amountMatch = text.match(/\d+(?:[.,]\d{1,2})?/u);
+    if (!amountMatch || /\bpan\b/iu.test(text)) {
+      return HttpResponse.json({ error: { code: 'AMOUNT_NOT_DETECTED', message: 'No pude identificar el monto.' } }, { status: 422 });
     }
 
-    const amount = amountMatch[0].replace(',', '.');
-    const [whole, fraction = ''] = amount.split('.');
-    const normalizedAmount = `${whole}.${fraction.padEnd(2, '0')}`;
-    const type: TransactionType = /pagaron|ingreso|recib[ií]|sueldo|freelance|vend[ií]/i.test(text) ? 'INCOME' : 'EXPENSE';
-    const concept = /^\s*\d+(?:[.,]\d{1,2})?\s*$/.test(text)
+    const [whole = '0', fraction = ''] = amountMatch[0].replace(',', '.').split('.');
+    const amount = `${BigInt(whole)}.${fraction.padEnd(2, '0')}`;
+    const type: TransactionType = /pagaron|ingreso|recib(?:i|\u00ed)|sueldo|freelance|vend(?:i|\u00ed)/iu.test(text) ? 'INCOME' : 'EXPENSE';
+    const concept = /^\s*\d+(?:[.,]\d{1,2})?\s*$/u.test(text)
       ? 'Gasto general'
-      : text.match(/(?:en|por|de)\s+(.+)$/i)?.[1]?.trim() || text.replace(amountMatch[0], '').trim() || 'Sin concepto';
+      : text.match(/(?:en|por|de)\s+(.+)$/iu)?.[1]?.trim() || text.replace(amountMatch[0], '').trim() || 'Sin concepto';
     const category = findSuggestedCategory(type, concept);
+    const wallet = body.wallet_id
+      ? savedWallets.find(({ id }) => id === body.wallet_id)
+      : savedWallets.find(({ is_default }) => is_default);
+    if (!wallet || wallet.status === 'INACTIVE') {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Crea un monedero antes de registrar.' } }, { status: 409 });
+    }
 
     return HttpResponse.json({
-      transaction: {
-        id: crypto.randomUUID(),
+      preview_id: crypto.randomUUID(),
+      wallet_id: wallet.id,
+      extracted: {
         type,
-        amount: normalizedAmount,
-        currency: 'PEN',
+        amount,
+        currency: wallet.currency,
         concept,
         transaction_date: today(),
-        wallet_id: body.wallet_id ?? '4d6b3036-4290-4bde-aea4-375c779ef48b',
+        wallet_id: wallet.id,
         category,
       },
+      confidence: 0.94,
+      requires_confirmation: true,
     });
   }),
   http.post('*/transactions', async ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     const body = await request.json() as {
-      type: TransactionType;
+      type: TransactionType | 'expense' | 'income';
       amount: string;
       currency: string;
       concept: string;
-      transaction_date: string;
+      transaction_date?: string;
+      occurred_at?: string;
       wallet_id: string;
       category_id: string;
+      category_source?: 'manual' | 'suggested';
+      source?: string;
       original_text?: string;
     };
+    const type: TransactionType = body.type.toUpperCase() === 'INCOME' ? 'INCOME' : 'EXPENSE';
+    const transactionDate = body.transaction_date ?? body.occurred_at?.slice(0, 10) ?? today();
     if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
       return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
     }
@@ -1010,35 +1029,50 @@ export const handlers = [
     if (wallet.currency !== body.currency) {
       return HttpResponse.json({ error: { code: 'CURRENCY_MISMATCH', message: 'La moneda de la transacción no coincide con el monedero.' } }, { status: 422 });
     }
-    const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === body.type);
+    const category = categoryCatalog.find(({ id, type: categoryType }) => id === body.category_id && categoryType === type);
     if (!category) {
       return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.' } }, { status: 422 });
     }
 
     const transaction: MockTransaction = {
       id: crypto.randomUUID(),
-      type: body.type,
+      type,
       amount: body.amount,
       currency: body.currency,
       concept: body.concept,
-      transaction_date: body.transaction_date,
+      transaction_date: transactionDate,
       wallet_id: body.wallet_id,
-      category,
-      source: 'TEXT',
+      category: { ...category, source: body.category_source ?? 'suggested' },
+      source: body.source?.toUpperCase() === 'TEXT' ? 'TEXT' : 'MANUAL',
       created_at: new Date().toISOString(),
     };
     savedTransactions.set(transaction.id, transaction);
     updateWalletBalance(wallet, transaction.type, transaction.amount);
-    const alerts = body.type === 'EXPENSE'
+    const alerts = type === 'EXPENSE'
       ? evaluateMockBudgetAlerts({
         categoryId: category.id,
         currency: body.currency,
         amountCents: amountToCents(body.amount),
-        transactionDate: body.transaction_date || today(),
+        transactionDate,
       })
       : [];
+    const alertScenario = /alerta/iu.test(`${body.concept} ${body.original_text ?? ''}`)
+      || amountToCents(body.amount) === 50_000n;
+    const alertPriority = amountToCents(body.amount) === 50_000n ? 'high' : 'normal';
+    const budget_alert = alertScenario
+      ? alerts.find((alert) => alert.priority === alertPriority) ?? {
+        id: crypto.randomUUID(),
+        title: alertPriority === 'high' ? 'Presupuesto superado' : 'Alerta de presupuesto',
+        message: alertPriority === 'high'
+          ? `Superaste el presupuesto de ${category.name}.`
+          : `Alerta de presupuesto para ${category.name}.`,
+        priority: alertPriority,
+        threshold_percentage: alertPriority === 'high' ? 100 : 80,
+        usage_percentage: alertPriority === 'high' ? 200 : 80,
+      }
+      : undefined;
 
-    return HttpResponse.json({ transaction, alerts }, { status: 201 });
+    return HttpResponse.json({ transaction, alerts, ...(budget_alert ? { budget_alert } : {}) }, { status: 201 });
   }),
   http.patch('*/transactions/:id', async ({ params, request }) => {
     const transactionId = String(params.id);
@@ -1306,6 +1340,101 @@ function resetCu08Notifications() {
 }
 
 handlers.unshift(
+  http.post('*/api/v1/transactions/text', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const idempotencyKey = request.headers.get('Idempotency-Key');
+    if (!idempotencyKey) {
+      return HttpResponse.json({ error: { code: 'VALIDATION_ERROR', message: 'Falta la clave de idempotencia.' } }, { status: 422 });
+    }
+    const cachedResponse = savedTextResponses.get(idempotencyKey);
+    if (cachedResponse) return HttpResponse.json(cachedResponse, { status: 201 });
+    const body = await request.json() as { text?: string; wallet_id?: string; client_timezone?: string };
+    const text = body.text?.trim() ?? '';
+
+    if (/falla/iu.test(text)) {
+      return HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'El servicio no está disponible. Intenta nuevamente.' } }, { status: 503 });
+    }
+    if (text.length === 0 || text.length > 500) {
+      return HttpResponse.json({ error: { code: 'VALIDATION_ERROR', message: 'Escribe entre 1 y 500 caracteres.' } }, { status: 422 });
+    }
+
+    const amountMatch = text.match(/\d+(?:[.,]\d{1,2})?/u);
+    if (!amountMatch || /\bpan\b/iu.test(text)) {
+      return HttpResponse.json({ error: { code: 'AMOUNT_NOT_DETECTED', message: 'No pude identificar el monto. ¿Cuánto fue el gasto/ingreso?' } }, { status: 422 });
+    }
+
+    const [whole = '0', fraction = ''] = amountMatch[0].replace(',', '.').split('.');
+    const amount = `${BigInt(whole)}.${fraction.padEnd(2, '0')}`;
+    if (!isValidBudgetAmount(amount)) {
+      return HttpResponse.json({ error: { code: 'INVALID_AMOUNT', message: 'Ingresa un monto válido mayor que cero.' } }, { status: 422 });
+    }
+
+    const type: TransactionType = /pagaron|ingreso|recib[ií]|sueldo|freelance|vend[ií]/iu.test(text) ? 'INCOME' : 'EXPENSE';
+    const concept = text.replace(amountMatch[0], '').replace(/\b(sol(?:es)?|pen|s\/)\b/giu, '').trim() || 'Gasto general';
+    const foodCategoryId = 'f61d5fcc-730a-48d9-81dc-1db75ce4af16';
+    const category = type === 'EXPENSE' && (amount === '200.00' || amount === '500.00')
+      ? categoryCatalog.find(({ id }) => id === foodCategoryId)!
+      : findSuggestedCategory(type, concept);
+    const wallet = body.wallet_id
+      ? savedWallets.find(({ id }) => id === body.wallet_id)
+      : savedWallets.find(({ is_default }) => is_default);
+    if (!wallet || wallet.status === 'INACTIVE') {
+      return HttpResponse.json({ error: { code: 'NO_ACTIVE_WALLET', message: 'Crea un monedero antes de registrar.' } }, { status: 409 });
+    }
+
+    const transaction: MockTransaction = {
+      id: crypto.randomUUID(),
+      type,
+      amount,
+      currency: wallet.currency,
+      concept,
+      transaction_date: today(),
+      wallet_id: wallet.id,
+      category,
+      source: 'TEXT',
+      created_at: new Date().toISOString(),
+    };
+    savedTransactions.set(transaction.id, transaction);
+    updateWalletBalance(wallet, type, amount);
+
+    const alerts = type === 'EXPENSE'
+      ? evaluateMockBudgetAlerts({
+        categoryId: category.id,
+        currency: wallet.currency,
+        amountCents: amountToCents(amount),
+        transactionDate: transaction.transaction_date,
+      })
+      : [];
+    const expectedPriority = amount === '200.00' ? 'normal' : amount === '500.00' ? 'high' : undefined;
+    let budget_alert = expectedPriority ? alerts.find(({ priority }) => priority === expectedPriority) : alerts[0];
+    if (expectedPriority && !budget_alert) {
+      const budget = savedBudgets.find(({ category: itemCategory, currency }) => itemCategory.id === category.id && currency === wallet.currency);
+      const threshold = expectedPriority === 'normal' ? 80 : 100;
+      const usagePercentage = budget
+        ? Number((amountToCents(amount) * 1_000n) / amountToCents(budget.amount)) / 10
+        : threshold;
+      const title = expectedPriority === 'high' ? 'Presupuesto superado' : 'Alerta de presupuesto';
+      budget_alert = {
+        id: crypto.randomUUID(),
+        title,
+        priority: expectedPriority,
+        threshold_percentage: threshold,
+        usage_percentage: usagePercentage,
+        message: expectedPriority === 'high'
+          ? `Superaste el 100% de tu presupuesto de ${category.name}.`
+          : `Cruzaste el 80% de tu presupuesto de ${category.name}.`,
+      };
+    }
+
+    const responseBody = {
+      transaction,
+      wallet_balance: wallet.balance,
+      wallet_name: wallet.name,
+      ...(budget_alert ? { budget_alert } : {}),
+    };
+    savedTextResponses.set(idempotencyKey, responseBody);
+    return HttpResponse.json(responseBody, { status: 201 });
+  }),
   http.get('*/api/v1/budgets/:categoryId/alert-thresholds', ({ params }) => {
     const categoryId = String(params.categoryId);
     const budget = savedBudgets.find((item) => item.category.id === categoryId);

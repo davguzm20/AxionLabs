@@ -46,7 +46,6 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
   }, [transaction]);
 
   async function openCategoryEditor() {
-    if (status !== 'extracted') return;
     setIsEditorOpen(true);
     setSelectedCategoryId(currentTransaction.category.id);
     setEditedConcept(currentTransaction.concept);
@@ -120,11 +119,11 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
           </div>
         ) : (
           <div className="mt-4 flex w-full gap-2">
-            <Link to="/historial" className="inline-flex min-h-11 flex-1 items-center justify-center rounded-md bg-brand-600 px-3 text-sm font-medium text-white">Ver historial</Link>
+            <Link to="/historial" className="inline-flex min-h-11 w-full items-center justify-center rounded-md bg-brand-600 px-3 text-sm font-medium text-white">Ver historial</Link>
           </div>
         )}
       </section>
-      {isEditorOpen && status === 'extracted' && createPortal(
+      {isEditorOpen && createPortal(
         <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingCategory && !isAccepting) setIsEditorOpen(false); }}>
           <section role="dialog" aria-modal="true" aria-labelledby={`edit-category-title-${currentTransaction.id}`} className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-t-xl bg-white p-5 shadow-lg sm:rounded-xl">
             <div className="flex items-center justify-between gap-3">
@@ -142,10 +141,11 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
               disabled={savingCategory || isAccepting}
               className="mt-1 min-h-11 w-full rounded-md border border-ink-300 px-3 text-sm text-ink-900"
             />
+            <p className="mt-4 block text-sm font-medium text-ink-700">Categoría</p>
             {loadingCategories ? (
               <p role="status" className="flex min-h-24 items-center justify-center gap-2 text-sm text-ink-500"><LoaderCircle aria-hidden="true" className="animate-spin" size={18} /> Cargando categorías…</p>
             ) : (
-              <div role="group" aria-label="Categorías disponibles" className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div role="group" aria-label="Categorías disponibles" className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {categories.map((category) => {
                   const selected = selectedCategoryId === category.id;
                   return (
@@ -157,11 +157,11 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
               </div>
             )}
             {error && <p role="alert" className="mt-3 text-sm text-danger-600">{error}</p>}
-            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setIsEditorOpen(false)} disabled={savingCategory || isAccepting} className="min-h-11 rounded-md border border-ink-300 px-4 text-sm font-medium text-ink-900 disabled:opacity-50">Cancelar</button>
-              <button type="button" onClick={() => void saveCategory()} disabled={loadingCategories || savingCategory || isAccepting || !selectedCategoryId || !editedConcept.trim() || (selectedCategoryId === currentTransaction.category.id && editedConcept.trim() === currentTransaction.concept)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50">
+            <div className="mt-5 flex flex-row gap-3">
+              <button type="button" onClick={() => setIsEditorOpen(false)} disabled={savingCategory || isAccepting} className="min-h-11 min-w-0 flex-1 rounded-md border border-ink-300 px-3 text-sm font-medium text-ink-900 disabled:opacity-50">Cancelar</button>
+              <button type="button" onClick={() => void saveCategory()} disabled={loadingCategories || savingCategory || isAccepting || !selectedCategoryId || !editedConcept.trim() || (selectedCategoryId === currentTransaction.category.id && editedConcept.trim() === currentTransaction.concept)} className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50">
                 {savingCategory && <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />}
-                {savingCategory ? 'Guardando…' : status === 'extracted' ? 'Usar cambios' : 'Guardar cambios'}
+                {savingCategory ? 'Guardando…' : status === 'extracted' ? 'Hacer cambios' : 'Guardar cambios'}
               </button>
             </div>
           </section>
