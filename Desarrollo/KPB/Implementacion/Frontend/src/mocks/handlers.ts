@@ -232,15 +232,18 @@ resetSavedTransactions();
 
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
+  resetCu08ThresholdConfigs();
   resetSavedTransactions();
   savedWallets.splice(0, savedWallets.length, ...mockWalletSeeds.map((wallet) => ({ ...wallet })));
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
+  resetCu08Notifications();
 }
 
 export function resetNotificationMocks() {
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
+  resetCu08Notifications();
 }
 
 function publishNotificationEvent(event: NotificationEvent) {
@@ -538,6 +541,31 @@ export const handlers = [
   http.get('*/api/v1/notifications', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     const url = new URL(request.url);
+    const usesCu08Format = url.searchParams.has('type') || url.searchParams.has('unread');
+    if (usesCu08Format) {
+      if (!liveNotificationAdded && Date.now() - mockStartedAt >= 10_000) {
+        liveNotificationAdded = true;
+        mockCu08Notifications.unshift({
+          id: 'notif-live-food-90', type: 'budget_alert', priority: 'normal',
+          category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación' }, threshold_percentage: 90,
+          usage_percentage: 91.2, spent_month: '456.00', monthly_limit: '500.00', remaining: '44.00',
+          message: 'Llegaste al 90% de tu tope en Alimentación. Gastaste S/ 456.00 de S/ 500.00.',
+          read: false, created_at: new Date().toISOString(),
+        });
+      }
+      const unread = url.searchParams.get('unread');
+      const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1);
+      const pageSize = Math.min(50, Math.max(1, Number(url.searchParams.get('page_size') ?? 10) || 10));
+      const filtered = mockCu08Notifications.filter((item) =>
+        (!url.searchParams.has('type') || item.type === url.searchParams.get('type'))
+        && (unread === null || item.read === (unread !== 'true')),
+      );
+      const offset = (page - 1) * pageSize;
+      return HttpResponse.json({
+        data: filtered.slice(offset, offset + pageSize),
+        pagination: { page, page_size: pageSize, total: filtered.length, pages: Math.ceil(filtered.length / pageSize) },
+      });
+    }
     const status = url.searchParams.get('status');
     if (status && status !== 'UNREAD' && status !== 'READ') {
       return HttpResponse.json({ error: { code: 'INVALID_STATUS', message: 'Selecciona un filtro válido.' } }, { status: 422 });
@@ -564,6 +592,8 @@ export const handlers = [
       if (notification.status !== 'UNREAD') continue;
       notification.status = 'READ';
       notification.read_at = readAt;
+      const cu08Notification = mockCu08Notifications.find((item) => item.id === notification.id);
+      if (cu08Notification) cu08Notification.read = true;
       publishNotificationEvent({
         event: 'notification.read',
         id: notification.id,
@@ -574,9 +604,11 @@ export const handlers = [
   }),
   http.patch('*/api/v1/notifications/:notificationId/read', ({ params, request }) => {
     if (!hasSession(request)) return sessionExpired();
-    const notification = savedNotifications.find((item) => item.id === String(params.notificationId));
-    if (!notification) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos esta notificación.' } }, { status: 404 });
-    if (notification.status === 'UNREAD') {
+    const notificationId = String(params.notificationId);
+    const notification = savedNotifications.find((item) => item.id === notificationId);
+    const cu08Notification = mockCu08Notifications.find((item) => item.id === notificationId);
+    if (!notification && !cu08Notification) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos esta notificación.' } }, { status: 404 });
+    if (notification?.status === 'UNREAD') {
       notification.status = 'READ';
       notification.read_at = new Date().toISOString();
       publishNotificationEvent({
@@ -585,7 +617,18 @@ export const handlers = [
         data: { id: notification.id, status: 'READ' },
       });
     }
-    return HttpResponse.json({ ...notification });
+    if (cu08Notification) cu08Notification.read = true;
+    if (notification) return HttpResponse.json({ ...notification });
+    return HttpResponse.json({
+      id: cu08Notification!.id,
+      type: 'BUDGET_ALERT',
+      title: 'Alerta de presupuesto',
+      body: cu08Notification!.message,
+      status: 'READ',
+      alert_id: null,
+      created_at: cu08Notification!.created_at,
+      read_at: new Date().toISOString(),
+    });
   }),
   http.get('*/api/v1/budgets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
@@ -1193,3 +1236,107 @@ export const handlers = [
     });
   }),
 ];
+
+type MockCu08Notification = {
+  id: string;
+  type: string;
+  priority: 'normal' | 'high';
+  category: { id: string; name: string };
+  threshold_percentage: number;
+  usage_percentage: number;
+  spent_month: string;
+  monthly_limit: string;
+  remaining: string;
+  message: string;
+  read: boolean;
+  created_at: string;
+};
+
+const thresholdConfigs = new Map(savedBudgets.map((budget) => [budget.category.id, {
+  thresholds: budget.thresholds.map((threshold) => threshold.percentage), channels: ['app'], is_default: true,
+}]));
+const mockStartedAt = Date.now();
+let liveNotificationAdded = false;
+const mockCu08Notifications: MockCu08Notification[] = [
+  {
+    id: 'notif-food-75', type: 'budget_alert', priority: 'normal',
+    category: { id: 'cat-food', name: 'Alimentación' }, threshold_percentage: 75,
+    usage_percentage: 82.16, spent_month: '410.80', monthly_limit: '500.00', remaining: '89.20',
+    message: 'Llegaste al 75% de tu tope en Alimentación. Gastaste S/ 410.80 de S/ 500.00.',
+    read: false, created_at: new Date(mockStartedAt - 4 * 60_000).toISOString(),
+  },
+  {
+    id: 'notif-transport-100', type: 'budget_alert', priority: 'high',
+    category: { id: 'cat-transport', name: 'Transporte' }, threshold_percentage: 100,
+    usage_percentage: 105.25, spent_month: '84.20', monthly_limit: '80.00', remaining: '-4.20',
+    message: 'Superaste el 100% de tu tope en Transporte. Gastaste S/ 84.20 de S/ 80.00.',
+    read: false, created_at: new Date(mockStartedAt - 20 * 60_000).toISOString(),
+  },
+];
+
+function resetCu08ThresholdConfigs() {
+  thresholdConfigs.clear();
+  for (const budget of savedBudgets) {
+    thresholdConfigs.set(budget.category.id, {
+      thresholds: budget.thresholds.map((threshold) => threshold.percentage),
+      channels: ['app'],
+      is_default: true,
+    });
+  }
+}
+
+function resetCu08Notifications() {
+  mockCu08Notifications.splice(0, mockCu08Notifications.length,
+    {
+      id: 'notif-food-75', type: 'budget_alert', priority: 'normal',
+      category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación' }, threshold_percentage: 75,
+      usage_percentage: 82.16, spent_month: '410.80', monthly_limit: '500.00', remaining: '89.20',
+      message: 'Llegaste al 75% de tu tope en Alimentación. Gastaste S/ 410.80 de S/ 500.00.',
+      read: false, created_at: new Date(mockStartedAt - 4 * 60_000).toISOString(),
+    },
+    {
+      id: 'notif-transport-100', type: 'budget_alert', priority: 'high',
+      category: { id: 'category-transport', name: 'Transporte' }, threshold_percentage: 100,
+      usage_percentage: 105.25, spent_month: '84.20', monthly_limit: '80.00', remaining: '-4.20',
+      message: 'Superaste el 100% de tu tope en Transporte. Gastaste S/ 84.20 de S/ 80.00.',
+      read: false, created_at: new Date(mockStartedAt - 20 * 60_000).toISOString(),
+    },
+  );
+  liveNotificationAdded = false;
+}
+
+handlers.unshift(
+  http.get('*/api/v1/budgets/:categoryId/alert-thresholds', ({ params }) => {
+    const categoryId = String(params.categoryId);
+    const budget = savedBudgets.find((item) => item.category.id === categoryId);
+    const config = thresholdConfigs.get(categoryId) ?? (budget ? {
+      thresholds: budget.thresholds.map((threshold) => threshold.percentage), channels: ['app'], is_default: true,
+    } : undefined);
+    if (!config) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
+    return HttpResponse.json({ category_id: categoryId, ...config });
+  }),
+  http.put('*/api/v1/budgets/:categoryId/alert-thresholds', async ({ params, request }) => {
+    const categoryId = String(params.categoryId);
+    const budget = savedBudgets.find((item) => item.category.id === categoryId);
+    if (!budget) {
+      return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.' } }, { status: 404 });
+    }
+    const body = await request.json() as { thresholds?: number[]; channels?: string[] };
+    const thresholds = body.thresholds;
+    if (!thresholds || thresholds.length < 1 || thresholds.length > 5 || thresholds.some((value) => !Number.isInteger(value) || value < 1 || value > 100) || new Set(thresholds).size !== thresholds.length) {
+      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'Configura entre uno y cinco porcentajes enteros del 1 al 100.' } }, { status: 422 });
+    }
+    const channels = body.channels ?? ['app'];
+    if (channels.some((channel) => !['app', 'email'].includes(channel))) {
+      return HttpResponse.json({ error: { code: 'INVALID_CHANNEL', message: 'Selecciona canales válidos.' } }, { status: 422 });
+    }
+    const config = { thresholds, channels, is_default: false };
+    thresholdConfigs.set(categoryId, config);
+    budget.thresholds = thresholds.map((percentage) => ({
+      id: budget.thresholds.find((threshold) => threshold.percentage === percentage)?.id ?? crypto.randomUUID(),
+      percentage,
+      triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
+    }));
+    return HttpResponse.json({ category_id: categoryId, ...config });
+  }),
+);

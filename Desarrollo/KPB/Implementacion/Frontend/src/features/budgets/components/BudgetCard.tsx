@@ -1,4 +1,5 @@
 import {
+  BellRing,
   BookOpen,
   BusFront,
   CircleHelp,
@@ -30,6 +31,7 @@ const categoryIcons: Record<string, LucideIcon> = {
 interface BudgetCardProps {
   budget: Budget;
   onEdit: (budget: Budget) => void;
+  onConfigureAlerts: (budget: Budget) => void;
   onDeactivate: (budget: Budget) => void;
   onReactivate: (budget: Budget) => void;
   busy?: boolean;
@@ -48,7 +50,6 @@ function getRestartLabel(periodEnd: string): string {
     day: 'numeric',
     month: 'long',
   }).format(nextPeriod);
-
   return `Se reinicia el ${date}`;
 }
 
@@ -58,8 +59,9 @@ function getProgressState(percentage: number): { label: string; color: string } 
   return { label: 'Vas bien', color: 'bg-brand-500' };
 }
 
-export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = false }: BudgetCardProps) {
-  const Icon = categoryIcons[budget.category.name.toLocaleLowerCase('es-PE')] ?? CircleHelp;
+export function BudgetCard({ budget, onEdit, onConfigureAlerts, onDeactivate, onReactivate, busy = false }: BudgetCardProps) {
+  const categoryName = budget.category.name;
+  const Icon = categoryIcons[categoryName.toLocaleLowerCase('es-PE')] ?? CircleHelp;
   const percentage = Math.max(0, budget.percentage);
   const state = getProgressState(percentage);
   const isInactive = budget.status === 'INACTIVE';
@@ -73,41 +75,26 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = 
         <div className="flex min-w-0 items-center gap-3">
           <Icon aria-hidden="true" size={20} className="shrink-0 text-ink-700" />
           <div className="min-w-0">
-            <h2 id={`budget-${budget.id}-title`} className="truncate text-base font-semibold text-ink-900">
-              {budget.category.name}
-            </h2>
+            <h2 id={`budget-${budget.id}-title`} className="truncate text-base font-semibold text-ink-900">{categoryName}</h2>
             <p className="text-xs text-ink-500">{getPeriodName(budget)} · {budget.currency}</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {!isInactive && (
             <>
-              <button
-                type="button"
-                aria-label={`Editar presupuesto de ${budget.category.name}`}
-                onClick={() => onEdit(budget)}
-                className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-accent-600 hover:bg-accent-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-500"
-              >
+              <button type="button" aria-label={`Configurar alertas para ${categoryName}`} onClick={() => onConfigureAlerts(budget)} className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-accent-600 hover:bg-accent-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-500">
+                <BellRing aria-hidden="true" size={19} />
+              </button>
+              <button type="button" aria-label={`Editar presupuesto de ${categoryName}`} onClick={() => onEdit(budget)} className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-accent-600 hover:bg-accent-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-500">
                 <Pencil aria-hidden="true" size={19} />
               </button>
-              <button
-                type="button"
-                aria-label={`Desactivar presupuesto de ${budget.category.name}`}
-                onClick={() => onDeactivate(budget)}
-                disabled={busy}
-                className="min-h-11 rounded-md px-2 text-xs font-medium text-ink-500 underline hover:text-danger-600 disabled:opacity-50"
-              >
+              <button type="button" onClick={() => onDeactivate(budget)} disabled={busy} className="min-h-11 rounded-md px-2 text-xs font-medium text-ink-500 underline hover:text-danger-600 disabled:opacity-50">
                 Desactivar
               </button>
             </>
           )}
           {isInactive && (
-            <button
-              type="button"
-              onClick={() => onReactivate(budget)}
-              disabled={busy}
-              className="min-h-11 rounded-md px-2 text-sm font-medium text-accent-600 underline disabled:opacity-50"
-            >
+            <button type="button" onClick={() => onReactivate(budget)} disabled={busy} className="min-h-11 rounded-md px-2 text-sm font-medium text-accent-600 underline disabled:opacity-50">
               Reactivar
             </button>
           )}
@@ -121,15 +108,7 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = 
         {isInactive && <span className="rounded-full bg-bg px-2.5 py-1 text-xs font-medium text-ink-700">Inactivo</span>}
       </div>
 
-      <div
-        className="mt-2 h-2 overflow-hidden rounded-full bg-ink-300/50"
-        role="progressbar"
-        aria-label={`Uso del presupuesto de ${budget.category.name}`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.min(percentage, 100)}
-        aria-valuetext={`${percentage.toFixed(1)}% utilizado. ${state.label}.`}
-      >
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-ink-300/50" role="progressbar" aria-label={`Uso del presupuesto de ${categoryName}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(percentage, 100)} aria-valuetext={`${percentage.toFixed(1)}% utilizado. ${state.label}.`}>
         <div className={`h-full rounded-full ${state.color}`} style={{ width: `${Math.min(percentage, 100)}%` }} />
       </div>
 
@@ -138,9 +117,7 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = 
         <p className="font-semibold text-ink-700">Tope: {formatMoney(budget.amount, budget.currency)}</p>
       </div>
       <p className={`mt-1 text-sm ${negativeRemaining ? 'font-medium text-danger-600' : 'text-ink-700'}`}>
-        {negativeRemaining
-          ? `Te pasaste por ${formatMoney(remainingAmount, budget.currency)}`
-          : `Disponible: ${formatMoney(budget.remaining, budget.currency)}`}
+        {negativeRemaining ? `Te pasaste por ${formatMoney(remainingAmount, budget.currency)}` : `Disponible: ${formatMoney(budget.remaining, budget.currency)}`}
       </p>
       <p className="mt-1 text-xs text-ink-500">{getRestartLabel(budget.period_end)}</p>
 
