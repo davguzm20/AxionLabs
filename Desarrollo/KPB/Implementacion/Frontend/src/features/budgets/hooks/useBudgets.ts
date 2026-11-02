@@ -1,52 +1,88 @@
-import { useCallback, useEffect, useState } from 'react';
-import { getBudgets, getExpenseCategories, saveAlertThreshold, saveBudget } from '../services/budgetService';
-import type { Budget, Category } from '../types/budget.types';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  createBudget,
+  deactivateBudget,
+  getBudget,
+  listBudgets,
+  listExpenseCategories,
+  reactivateBudget,
+  replaceBudgetThresholds,
+  updateBudget,
+} from '../services/budgetService';
+import type {
+  Budget,
+  BudgetCreatePayload,
+  BudgetStatus,
+  BudgetUpdatePayload,
+} from '../types/budget.types';
 
-export function useBudgets() {
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [period, setPeriod] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface SaveBudgetVariables {
+  budgetId?: string;
+  createPayload: BudgetCreatePayload;
+  updatePayload: BudgetUpdatePayload;
+  thresholds: number[];
+}
 
-  const reload = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    try {
-      const result = await getBudgets(signal);
-      setBudgets(result.data);
-      setPeriod(result.period);
-      setCategories(await getExpenseCategories(signal));
-      setError(null);
-    } catch (cause) {
-      if (cause instanceof DOMException && cause.name === 'AbortError') return;
-      setError(cause instanceof Error ? cause.message : 'No se pudieron cargar los presupuestos.');
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
-  }, []);
+export function useBudgets(status: BudgetStatus = 'ACTIVE') {
+  const queryClient = useQueryClient();
+  const budgetsQuery = useQuery({
+    queryKey: ['budgets', status],
+    queryFn: ({ signal }) => listBudgets(status, signal),
+  });
+  const categoriesQuery = useQuery({
+    queryKey: ['categories', 'EXPENSE'],
+    queryFn: ({ signal }) => listExpenseCategories(signal),
+    staleTime: 5 * 60_000,
+  });
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void reload(controller.signal);
-    return () => controller.abort();
-  }, [reload]);
+  const saveMutation = useMutation<Budget, Error, SaveBudgetVariables>({
+    mutationFn: async ({ budgetId, createPayload, updatePayload, thresholds }) => {
+      if (!budgetId) return createBudget(createPayload);
 
-  const save = async (categoryId: string, monthlyLimit: string, threshold: number) => {
-    setSaving(true);
-    setError(null);
-    try {
-      const updated = await saveBudget(categoryId, { monthly_limit: monthlyLimit });
-      await saveAlertThreshold(categoryId, threshold);
-      setBudgets((current) => current.map((budget) => budget.category_id === categoryId ? { ...updated, alert_threshold: threshold } : budget));
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'No se pudo guardar el presupuesto.';
-      setError(message);
-      throw cause;
-    } finally {
-      setSaving(false);
-    }
+      await updateBudget(budgetId, updatePayload);
+      await replaceBudgetThresholds(budgetId, thresholds);
+      return getBudget(budgetId);
+    },
+    onSettled: async (_data, _error, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ['budgets'] });
+      if (variables.budgetId) {
+        await queryClient.invalidateQueries({ queryKey: ['budget', variables.budgetId] });
+      }
+    },
+  });
+
+  const deactivateMutation = useMutation<void, Error, string>({
+    mutationFn: deactivateBudget,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['budgets'] }),
+  });
+
+  const reactivateMutation = useMutation<Budget, Error, string>({
+    mutationFn: reactivateBudget,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['budgets'] }),
+  });
+
+  return {
+    budgets: budgetsQuery.data?.data ?? [],
+    categories: categoriesQuery.data ?? [],
+    isLoading: budgetsQuery.isPending,
+    isCategoriesLoading: categoriesQuery.isPending,
+    error: budgetsQuery.error,
+    categoriesError: categoriesQuery.error,
+    refetch: budgetsQuery.refetch,
+    save: saveMutation.mutateAsync,
+    isSaving: saveMutation.isPending,
+    saveError: saveMutation.error,
+    deactivate: deactivateMutation.mutateAsync,
+    isDeactivating: deactivateMutation.isPending,
+    reactivate: reactivateMutation.mutateAsync,
+    isReactivating: reactivateMutation.isPending,
   };
+}
 
-  return { budgets, categories, period, loading, saving, error, reload, save, clearError: () => setError(null) };
+export function useBudgetDetails(budgetId?: string) {
+  return useQuery({
+    queryKey: ['budget', budgetId],
+    queryFn: ({ signal }) => getBudget(budgetId!, signal),
+    enabled: Boolean(budgetId),
+  });
 }

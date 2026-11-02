@@ -37,7 +37,7 @@ export function NotificationBell() {
         <Bell aria-hidden="true" size={21} />
         {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadCount > 99 ? '99+' : unreadCount}</span>}
       </button>
-      {open && <section aria-label="Notificaciones recientes" className="absolute right-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+      {open && <section aria-label="Notificaciones recientes" className="absolute right-0 top-full z-50 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
         <header className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-gray-900">Notificaciones</h2>
           <button

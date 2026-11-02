@@ -1,34 +1,65 @@
-import type { Budget, BudgetUpsertPayload, BudgetsResponse, Category } from '../types/budget.types';
+import { api } from '../../../lib/api';
+import type {
+  Budget,
+  BudgetCreatePayload,
+  BudgetListResponse,
+  BudgetStatus,
+  BudgetUpdatePayload,
+  Category,
+  CategoryListResponse,
+} from '../types/budget.types';
 
-const API = '/api/v1';
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: { message?: string }; message?: string } | null;
-    throw new Error(body?.error?.message ?? body?.message ?? 'No se pudo completar la operación.');
-  }
-  return response.json() as Promise<T>;
+export async function listBudgets(
+  status: BudgetStatus,
+  signal?: AbortSignal,
+): Promise<BudgetListResponse> {
+  const query = new URLSearchParams({ status });
+  return api<BudgetListResponse>(`/budgets?${query.toString()}`, { signal });
 }
 
-export async function getBudgets(signal?: AbortSignal): Promise<BudgetsResponse> {
-  return request<BudgetsResponse>(`${API}/budgets`, { signal });
+export async function getBudget(id: string, signal?: AbortSignal): Promise<Budget> {
+  return api<Budget>(`/budgets/${encodeURIComponent(id)}`, { signal });
 }
 
-export async function getExpenseCategories(signal?: AbortSignal): Promise<Category[]> {
-  const result = await request<Category[] | { data: Category[] }>(`${API}/categories`, { signal });
-  const categories = Array.isArray(result) ? result : result.data;
-  return categories.filter((category) => category.type !== 'INCOME');
+export async function listExpenseCategories(signal?: AbortSignal): Promise<Category[]> {
+  const query = new URLSearchParams({ type: 'EXPENSE' });
+  const response = await api<CategoryListResponse | Category[]>(`/categories?${query.toString()}`, { signal });
+  const categories = Array.isArray(response) ? response : response.data;
+  return categories.filter((category) => category.type === 'EXPENSE' && category.status !== 'INACTIVE');
 }
 
-export async function saveBudget(categoryId: string, payload: BudgetUpsertPayload): Promise<Budget> {
-  return request<Budget>(`${API}/budgets/${encodeURIComponent(categoryId)}`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+export async function createBudget(payload: BudgetCreatePayload): Promise<Budget> {
+  return api<Budget>('/budgets', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(payload),
   });
 }
 
-export async function saveAlertThreshold(categoryId: string, percentage: number): Promise<void> {
-  await request<unknown>(`${API}/budgets/${encodeURIComponent(categoryId)}/alert-thresholds`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thresholds: [percentage] }),
+export async function updateBudget(
+  id: string,
+  payload: BudgetUpdatePayload,
+): Promise<Budget> {
+  return api<Budget>(`/budgets/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function replaceBudgetThresholds(id: string, thresholds: number[]): Promise<void> {
+  await api<unknown>(`/budgets/${encodeURIComponent(id)}/thresholds`, {
+    method: 'PUT',
+    body: JSON.stringify({ thresholds }),
+  });
+}
+
+export async function deactivateBudget(id: string): Promise<void> {
+  await api<void>(`/budgets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function reactivateBudget(id: string): Promise<Budget> {
+  return api<Budget>(`/budgets/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'ACTIVE' satisfies BudgetStatus }),
   });
 }

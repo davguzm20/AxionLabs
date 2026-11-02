@@ -1,15 +1,19 @@
 import { ArrowUp, Image, Mic } from 'lucide-react';
-import type { RefObject } from 'react';
+import { useRef, type RefObject } from 'react';
 
 type ChatInputProps = {
   value: string;
   onChange: (value: string) => void;
   onSend: (text: string) => void;
+  onVoice: () => void;
+  onReceiptFile?: (file: File) => void;
   disabled?: boolean;
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
 };
 
-export function ChatInput({ value, onChange, onSend, disabled = false, textareaRef }: ChatInputProps) {
+export function ChatInput({ value, onChange, onSend, onVoice, onReceiptFile, disabled = false, textareaRef }: ChatInputProps) {
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
   function submitMessage() {
     if (!value.trim() || disabled) return;
     onSend(value);
@@ -18,10 +22,23 @@ export function ChatInput({ value, onChange, onSend, disabled = false, textareaR
 
   return (
     <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); submitMessage(); }}>
-      <button type="button" aria-label="Adjuntar imagen" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white p-2 text-gray-500 hover:bg-gray-100" title="Adjuntar imagen">
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/jpeg,image/png"
+        capture="environment"
+        className="sr-only"
+        aria-label="Seleccionar foto de un comprobante"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onReceiptFile?.(file);
+          event.currentTarget.value = '';
+        }}
+      />
+      <button type="button" onClick={() => imageInputRef.current?.click()} disabled={disabled} aria-label="Adjuntar imagen" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Adjuntar imagen">
         <Image aria-hidden="true" size={20} />
       </button>
-      <button type="button" aria-label="Grabar nota de voz" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white p-2 text-gray-500 hover:bg-gray-100" title="Grabar nota de voz">
+      <button type="button" onClick={onVoice} disabled={disabled} aria-label="Grabar nota de voz" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Grabar nota de voz">
         <Mic aria-hidden="true" size={20} />
       </button>
       <label className="sr-only" htmlFor="chat-message">¿Qué gastos o ingresos tuviste hoy?</label>

@@ -40,7 +40,10 @@ function fromDto(dto: NotificationDto): Notification {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const headers = new Headers(init?.headers);
+  const token = window.localStorage.getItem('access_token');
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(url, { ...init, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: string }; message?: string } | null;
     throw new Error(body?.error?.message ?? body?.message ?? 'No se pudieron cargar las notificaciones.');

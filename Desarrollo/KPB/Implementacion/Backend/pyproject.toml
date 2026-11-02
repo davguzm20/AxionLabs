@@ -4,9 +4,13 @@ version = "0.1.0"
 description = "Backend del proyecto KhipuBot"
 requires-python = ">=3.14"
 dependencies = [
+    "argon2-cffi>=23.1",
+    "email-validator>=2.2",
     "fastapi>=0.156",
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.6",
+    "pyjwt>=2.9",
+    "redis>=5.2",
     "sqlalchemy>=2.0",
     "uvicorn[standard]>=0.54",
 ]
@@ -15,6 +19,7 @@ dependencies = [
 dev = [
     "pytest>=9.1",
     "httpx2>=2.15",
+    "fakeredis>=2.26",
 ]
 
 [tool.uv]

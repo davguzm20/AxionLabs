@@ -2,6 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { getNotifications, markNotificationRead } from '../services/notificationService';
 import type { Notification } from '../types/alert.types';
 
+function hasAccessToken(): boolean {
+  try {
+    return Boolean(window.localStorage.getItem('access_token'));
+  } catch {
+    return false;
+  }
+}
+
 export function useNotifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -11,6 +19,14 @@ export function useNotifications() {
   const [pages, setPages] = useState(1);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    if (!hasAccessToken()) {
+      setNotifications([]);
+      setUnreadCount(0);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     try {
       const [result, unreadResult] = await Promise.all([
         getNotifications({ page: 1, pageSize: 10 }, signal),
@@ -34,7 +50,7 @@ export function useNotifications() {
   }, []);
 
   const loadMore = async () => {
-    if (page >= pages) return;
+    if (!hasAccessToken() || page >= pages) return;
     try {
       const nextPage = page + 1;
       const result = await getNotifications({ page: nextPage, pageSize: 10 });
@@ -61,6 +77,7 @@ export function useNotifications() {
   }, [refresh]);
 
   const markRead = async (id: string) => {
+    if (!hasAccessToken()) return;
     await markNotificationRead(id);
     const wasUnread = notifications.some((item) => item.id === id && !item.read);
     setNotifications((current) => current.map((item) => item.id === id ? { ...item, read: true } : item));
