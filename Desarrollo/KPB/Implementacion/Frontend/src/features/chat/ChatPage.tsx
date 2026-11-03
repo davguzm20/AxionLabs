@@ -23,11 +23,36 @@ type ChatMessage =
 type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; budget_alert?: BudgetAlert; wallet_name?: string };
 type ApiError = Error & { status?: number; code?: string };
 
+function highestPriorityAlert(alerts: BudgetAlert[]): BudgetAlert | undefined {
+  return alerts.reduce<BudgetAlert | undefined>((highest, alert) => {
+    if (!highest) return alert;
+    const priority = (value: BudgetAlert) => value.priority?.toLocaleLowerCase() === 'high' ? 2 : value.threshold_percentage ?? 0;
+    return priority(alert) > priority(highest) ? alert : highest;
+  }, undefined);
+}
+
 export function ChatPage() {
   const queryClient = useQueryClient();
-  const [messages, setMessages] = useState<ChatMessage[]>([
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('khipubot_chat_messages');
+        if (saved) {
+          const parsed = JSON.parse(saved) as ChatMessage[];
+          if (Array.isArray(parsed)) {
+            return parsed.map((message) => message.kind === 'preview'
+              ? { ...message, imageFile: undefined, isSaving: false }
+              : message.kind === 'confirmation' ? { ...message, isSaving: false } : message);
+          }
+        }
+      } catch {
+        // Ignore invalid or unavailable browser storage.
+      }
+    }
+    return [
     { id: 'greeting', kind: 'bubble', author: 'bot', text: '¡Hola! Soy KhipuBot. ¿Qué gastos o ingresos tuviste hoy? Puedes escribirme, enviarme un audio o la foto de un comprobante.' },
-  ]);
+  ];
+  });
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [voiceRecorderOpen, setVoiceRecorderOpen] = useState(false);
@@ -35,6 +60,20 @@ export function ChatPage() {
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previewIdempotencyKeys = useRef(new Map<string, string>());
+  const savingPreviewIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    if (messages.length === 0) return;
+    try {
+      const persistentMessages = messages.map((message) => message.kind === 'preview'
+        ? { ...message, imageFile: undefined, isSaving: false }
+        : message.kind === 'confirmation' ? { ...message, isSaving: false } : message);
+      localStorage.setItem('khipubot_chat_messages', JSON.stringify(persistentMessages));
+    } catch {
+      // Keep the chat usable when browser storage is unavailable.
+    }
+  }, [messages]);
 
   useEffect(() => {
     if (sending || voiceRecorderOpen) return;
@@ -111,12 +150,13 @@ export function ChatPage() {
         const next = current.map((message) => message.kind === 'confirmation' && message.id === messageId
           ? { ...message, transaction: response.transaction, status: 'confirmed' as const, isSaving: false, saveError: undefined }
           : message);
-        if (response.alerts?.length && confirmationIndex >= 0) {
-          next.splice(confirmationIndex + 1, 0, ...response.alerts.map((alert) => ({
+        const alert = highestPriorityAlert(response.alerts ?? []);
+        if (alert && confirmationIndex >= 0) {
+          next.splice(confirmationIndex + 1, 0, {
             id: crypto.randomUUID(),
-            kind: 'alert' as const,
+            kind: 'alert',
             alert,
-          })));
+          });
         }
         return next;
       });
@@ -185,6 +225,8 @@ export function ChatPage() {
   }
 
   async function confirmPreview(messageId: string, source: 'TEXT' | 'VOICE' | 'RECEIPT', transactionDraft: TransactionDraft) {
+    if (savingPreviewIds.current.has(messageId)) return;
+    savingPreviewIds.current.add(messageId);
     setMessages((current) => current.map((message) => message.kind === 'preview' && message.id === messageId
       ? { ...message, isSaving: true, saveError: undefined }
       : message));
@@ -193,6 +235,7 @@ export function ChatPage() {
       if (!preview || preview.kind !== 'preview') return;
       const idempotencyKey = previewIdempotencyKeys.current.get(messageId) ?? crypto.randomUUID();
       previewIdempotencyKeys.current.set(messageId, idempotencyKey);
+      console.log('[Chat] Enviando una transacción al backend.');
       const response = source === 'TEXT'
         ? await api<SaveResponse>('/transactions', {
           method: 'POST',
@@ -238,14 +281,14 @@ export function ChatPage() {
             status: 'confirmed' as const,
           }
           : message);
-        const alerts = [...(response.alerts ?? []), ...(budgetAlert ? [budgetAlert] : [])];
-        if (alerts.length) {
+        const alert = highestPriorityAlert([...(response.alerts ?? []), ...(budgetAlert ? [budgetAlert] : [])]);
+        if (alert) {
           const index = next.findIndex((message) => message.id === messageId);
-          next.splice(index + 1, 0, ...alerts.map((alert) => ({
+          next.splice(index + 1, 0, {
             id: crypto.randomUUID(),
-            kind: 'alert' as const,
+            kind: 'alert',
             alert,
-          })));
+          });
         }
         return next;
       });
@@ -254,6 +297,8 @@ export function ChatPage() {
       setMessages((current) => current.map((message) => message.kind === 'preview' && message.id === messageId
         ? { ...message, isSaving: false, saveError: messageText }
         : message));
+    } finally {
+      savingPreviewIds.current.delete(messageId);
     }
   }
 

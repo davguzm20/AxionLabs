@@ -48,6 +48,8 @@ const categoryCatalog: MockCategory[] = [
 
 const savedTransactions = new Map<string, MockTransaction>();
 const savedTextResponses = new Map<string, unknown>();
+const savedTransactionResponses = new Map<string, unknown>();
+let transactionPostCallCount = 0;
 let savedNotifications: MockNotification[] = [];
 let savedPreferences = { main_currency: 'PEN' as const, email_notifications: true };
 const notificationSubscribers = new Set<(event: NotificationEvent) => void>();
@@ -177,7 +179,30 @@ function createSeedBudgets(): Budget[] {
   }));
 }
 
-let savedBudgets = createSeedBudgets();
+const MOCK_BUDGETS_STORAGE_KEY = 'mock_budgets_v2';
+
+function loadMockBudgets(): Budget[] {
+  if (typeof localStorage === 'undefined') return createSeedBudgets();
+  try {
+    const serialized = localStorage.getItem(MOCK_BUDGETS_STORAGE_KEY);
+    if (!serialized) return createSeedBudgets();
+    const parsed = JSON.parse(serialized) as Budget[];
+    return Array.isArray(parsed) ? parsed : createSeedBudgets();
+  } catch {
+    return createSeedBudgets();
+  }
+}
+
+function persistMockBudgets() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(MOCK_BUDGETS_STORAGE_KEY, JSON.stringify(savedBudgets));
+  } catch {
+    // Storage can be unavailable in private browsing or restricted environments.
+  }
+}
+
+let savedBudgets = loadMockBudgets();
 const today = () => new Date().toISOString().slice(0, 10);
 const hasSession = (request: Request) => request.headers.get('Authorization')?.startsWith('Bearer ') ?? false;
 
@@ -233,7 +258,10 @@ resetSavedTransactions();
 
 export function resetBudgetMocks() {
   savedBudgets = createSeedBudgets();
+  persistMockBudgets();
   savedTextResponses.clear();
+  savedTransactionResponses.clear();
+  transactionPostCallCount = 0;
   resetCu08ThresholdConfigs();
   resetSavedTransactions();
   savedWallets.splice(0, savedWallets.length, ...mockWalletSeeds.map((wallet) => ({ ...wallet })));
@@ -343,20 +371,20 @@ function evaluateMockBudgetAlerts(input: {
     budget.remaining = centsToMoney(amountCents - consumedCents);
     budget.percentage = amountCents === 0n ? 0 : Number((consumedCents * 1_000n) / amountCents) / 10;
 
-    const crossed = budget.thresholds
+    const crossedThresholds = budget.thresholds
       .filter((threshold) => !threshold.triggered
         && consumedCents * 100n >= amountCents * BigInt(threshold.percentage))
       .sort((left, right) => left.percentage - right.percentage);
+    crossedThresholds.forEach((threshold) => { threshold.triggered = true; });
+    const crossed = crossedThresholds.slice(-1);
 
     for (const threshold of crossed) {
-      threshold.triggered = true;
       const remainingCents = amountCents - consumedCents;
-      const overspentCents = remainingCents < 0n ? -remainingCents : 0n;
       const title = threshold.percentage === 100 && remainingCents >= 0n
         ? `Alcanzaste el 100% de tu presupuesto de ${budget.category.name}.`
         : `Cruzaste el ${threshold.percentage}% de tu presupuesto de ${budget.category.name}.`;
       const body = remainingCents < 0n
-        ? `Superaste tu presupuesto en ${formatMockMoney(overspentCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
+        ? `Superaste tu tope en ${budget.category.name}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
         : threshold.percentage === 100
           ? `Límite: ${formatMockMoney(amountCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
           : `Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}. Te quedan ${formatMockMoney(remainingCents, budget.currency)}.`;
@@ -380,7 +408,7 @@ function evaluateMockBudgetAlerts(input: {
         priority,
         threshold_percentage: threshold.percentage,
         usage_percentage: usagePercentage,
-        message: `${title} ${body}`,
+        message: body,
       });
       publishNotificationEvent({
         event: 'alert.created',
@@ -401,6 +429,7 @@ function evaluateMockBudgetAlerts(input: {
     }
   }
 
+  persistMockBudgets();
   return alerts;
 }
 
@@ -408,10 +437,12 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
   const normalized = concept.toLocaleLowerCase('es-PE');
   const patterns = type === 'INCOME'
     ? [[/sueldo|salario|planilla/, 'category-salary'], [/freelance|servicio/, 'category-freelance'], [/venta|vend[ií]/, 'category-sales']]
-    : [[/caf[eé]|almuerzo|cena|comida|men[uú]|restaurante/, 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'], [/taxi|bus|pasaje|metro|transporte/, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
+    : [[/caf[eé]|\b(?:comida|almuerzo|cena|desayuno|men[uú]|restaurante|pan)\b/u, 'f61d5fcc-730a-48d9-81dc-1db75ce4af16'], [/\b(?:pasaje|taxi|bus|movilidad|combi|metro|transporte)\b/u, 'category-transport'], [/farmacia|doctor|salud|medicina/, 'category-health']];
   const matchedId = patterns.find(([pattern]) => (pattern as RegExp).test(normalized))?.[1] as string | undefined;
   const fallbackId = type === 'INCOME' ? 'category-other-income' : 'category-other';
-  return categoryCatalog.find(({ id }) => id === (matchedId ?? fallbackId)) ?? categoryCatalog[0]!;
+  const fallback = categoryCatalog.find(({ id }) => id === fallbackId)
+    ?? categoryCatalog.find(({ id }) => id === 'category-other')!;
+  return categoryCatalog.find(({ id }) => id === matchedId) ?? fallback;
 }
 
 export const handlers = [
@@ -701,6 +732,7 @@ export const handlers = [
       })),
     });
     savedBudgets.push(budget);
+    persistMockBudgets();
     return HttpResponse.json(budget, { status: 201 });
   }),
   http.get('*/api/v1/budgets/:budgetId/thresholds', ({ params, request }) => {
@@ -725,6 +757,7 @@ export const handlers = [
       percentage,
       triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
     }));
+    persistMockBudgets();
     return HttpResponse.json({ data: toThresholds(budget) });
   }),
   http.post('*/api/v1/budgets/:budgetId/thresholds', async ({ params, request }) => {
@@ -745,6 +778,7 @@ export const handlers = [
       triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
     };
     budget.thresholds.push(threshold);
+    persistMockBudgets();
     return HttpResponse.json(threshold, { status: 201 });
   }),
   http.delete('*/api/v1/budgets/:budgetId/thresholds/:thresholdId', ({ params, request }) => {
@@ -759,6 +793,7 @@ export const handlers = [
       return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'El presupuesto debe conservar al menos un umbral.' } }, { status: 422 });
     }
     budget.thresholds = nextThresholds;
+    persistMockBudgets();
     return new HttpResponse(null, { status: 204 });
   }),
   http.get('*/api/v1/budgets/:budgetId', ({ params, request }) => {
@@ -777,6 +812,7 @@ export const handlers = [
     }
     if (body.status === 'INACTIVE') {
       budget.status = 'INACTIVE';
+      persistMockBudgets();
       return HttpResponse.json(budget);
     }
     let nextStatus = budget.status;
@@ -817,6 +853,7 @@ export const handlers = [
       status: nextStatus,
       thresholds: budget.thresholds,
     }));
+    persistMockBudgets();
     return HttpResponse.json(budget);
   }),
   http.delete('*/api/v1/budgets/:budgetId', ({ params, request }) => {
@@ -824,6 +861,7 @@ export const handlers = [
     const budget = findBudget(String(params.budgetId));
     if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.' } }, { status: 404 });
     budget.status = 'INACTIVE';
+    persistMockBudgets();
     return new HttpResponse(null, { status: 204 });
   }),
   http.get('*/api/v1/wallets', ({ request }) => {
@@ -965,16 +1003,22 @@ export const handlers = [
       return HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'El servicio no esta disponible. Intenta nuevamente.' } }, { status: 503 });
     }
     const amountMatch = text.match(/\d+(?:[.,]\d{1,2})?/u);
-    if (!amountMatch || /\bpan\b/iu.test(text)) {
+    if (!amountMatch) {
       return HttpResponse.json({ error: { code: 'AMOUNT_NOT_DETECTED', message: 'No pude identificar el monto.' } }, { status: 422 });
     }
 
     const [whole = '0', fraction = ''] = amountMatch[0].replace(',', '.').split('.');
     const amount = `${BigInt(whole)}.${fraction.padEnd(2, '0')}`;
     const type: TransactionType = /pagaron|ingreso|recib(?:i|\u00ed)|sueldo|freelance|vend(?:i|\u00ed)/iu.test(text) ? 'INCOME' : 'EXPENSE';
-    const concept = /^\s*\d+(?:[.,]\d{1,2})?\s*$/u.test(text)
+    const rawConcept = /^\s*\d+(?:[.,]\d{1,2})?\s*$/u.test(text)
       ? 'Gasto general'
-      : text.match(/(?:en|por|de)\s+(.+)$/iu)?.[1]?.trim() || text.replace(amountMatch[0], '').trim() || 'Sin concepto';
+      : text.match(/\b(?:en|por|de)\s+(.+)$/iu)?.[1] ?? text.replace(amountMatch[0], '');
+    const concept = rawConcept
+      .replace(/\b(?:gast[eé]|pagu[eé]|compr[eé])\b/giu, '')
+      .replace(/\b(?:sol(?:es)?|pen|s\/)\b/giu, '')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .replace(/^\p{L}/u, (letter) => letter.toLocaleUpperCase('es-PE')) || 'Sin concepto';
     const category = findSuggestedCategory(type, concept);
     const wallet = body.wallet_id
       ? savedWallets.find(({ id }) => id === body.wallet_id)
@@ -1001,6 +1045,9 @@ export const handlers = [
   }),
   http.post('*/transactions', async ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
+    transactionPostCallCount += 1;
+    console.log(`[MSW] POST /transactions call #${transactionPostCallCount}`);
+    const idempotencyKey = request.headers.get('Idempotency-Key');
     const body = await request.json() as {
       type: TransactionType | 'expense' | 'income';
       amount: string;
@@ -1014,6 +1061,8 @@ export const handlers = [
       source?: string;
       original_text?: string;
     };
+    const cachedResponse = idempotencyKey ? savedTransactionResponses.get(idempotencyKey) : undefined;
+    if (cachedResponse) return HttpResponse.json(cachedResponse, { status: 201 });
     const type: TransactionType = body.type.toUpperCase() === 'INCOME' ? 'INCOME' : 'EXPENSE';
     const transactionDate = body.transaction_date ?? body.occurred_at?.slice(0, 10) ?? today();
     if (typeof body.amount !== 'string' || !isValidBudgetAmount(body.amount)) {
@@ -1048,6 +1097,9 @@ export const handlers = [
     };
     savedTransactions.set(transaction.id, transaction);
     updateWalletBalance(wallet, transaction.type, transaction.amount);
+    if (type === 'EXPENSE') {
+      console.log('[MSW] Applying one accepted transaction to its submitted budget category');
+    }
     const alerts = type === 'EXPENSE'
       ? evaluateMockBudgetAlerts({
         categoryId: category.id,
@@ -1056,23 +1108,11 @@ export const handlers = [
         transactionDate,
       })
       : [];
-    const alertScenario = /alerta/iu.test(`${body.concept} ${body.original_text ?? ''}`)
-      || amountToCents(body.amount) === 50_000n;
-    const alertPriority = amountToCents(body.amount) === 50_000n ? 'high' : 'normal';
-    const budget_alert = alertScenario
-      ? alerts.find((alert) => alert.priority === alertPriority) ?? {
-        id: crypto.randomUUID(),
-        title: alertPriority === 'high' ? 'Presupuesto superado' : 'Alerta de presupuesto',
-        message: alertPriority === 'high'
-          ? `Superaste el presupuesto de ${category.name}.`
-          : `Alerta de presupuesto para ${category.name}.`,
-        priority: alertPriority,
-        threshold_percentage: alertPriority === 'high' ? 100 : 80,
-        usage_percentage: alertPriority === 'high' ? 200 : 80,
-      }
-      : undefined;
+    const budget_alert = alerts[0];
 
-    return HttpResponse.json({ transaction, alerts, ...(budget_alert ? { budget_alert } : {}) }, { status: 201 });
+    const responseBody = { transaction, alerts, ...(budget_alert ? { budget_alert } : {}) };
+    if (idempotencyKey) savedTransactionResponses.set(idempotencyKey, responseBody);
+    return HttpResponse.json(responseBody, { status: 201 });
   }),
   http.patch('*/transactions/:id', async ({ params, request }) => {
     const transactionId = String(params.id);
@@ -1405,26 +1445,7 @@ handlers.unshift(
         transactionDate: transaction.transaction_date,
       })
       : [];
-    const expectedPriority = amount === '200.00' ? 'normal' : amount === '500.00' ? 'high' : undefined;
-    let budget_alert = expectedPriority ? alerts.find(({ priority }) => priority === expectedPriority) : alerts[0];
-    if (expectedPriority && !budget_alert) {
-      const budget = savedBudgets.find(({ category: itemCategory, currency }) => itemCategory.id === category.id && currency === wallet.currency);
-      const threshold = expectedPriority === 'normal' ? 80 : 100;
-      const usagePercentage = budget
-        ? Number((amountToCents(amount) * 1_000n) / amountToCents(budget.amount)) / 10
-        : threshold;
-      const title = expectedPriority === 'high' ? 'Presupuesto superado' : 'Alerta de presupuesto';
-      budget_alert = {
-        id: crypto.randomUUID(),
-        title,
-        priority: expectedPriority,
-        threshold_percentage: threshold,
-        usage_percentage: usagePercentage,
-        message: expectedPriority === 'high'
-          ? `Superaste el 100% de tu presupuesto de ${category.name}.`
-          : `Cruzaste el 80% de tu presupuesto de ${category.name}.`,
-      };
-    }
+    const budget_alert = alerts[0];
 
     const responseBody = {
       transaction,
@@ -1466,6 +1487,7 @@ handlers.unshift(
       percentage,
       triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
     }));
+    persistMockBudgets();
     return HttpResponse.json({ category_id: categoryId, ...config });
   }),
 );

@@ -83,7 +83,7 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = 
             ? `Te pasaste por ${formatMoney(amountOverLimit, budget.currency)}`
             : `Te quedan ${formatMoney(budget.remaining, budget.currency)}`}
         </p>
-        <span className={`shrink-0 text-sm font-medium ${exceeded ? 'text-red-600' : 'text-gray-500'}`}>
+        <span className={`shrink-0 whitespace-nowrap text-sm font-medium ${exceeded ? 'text-red-600' : 'text-gray-500'}`}>
           {percentage.toFixed(0)}%
         </span>
       </div>
@@ -97,10 +97,10 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = 
           <p className="text-xs text-gray-500">Gastado:</p>
           <p className="truncate text-sm font-semibold text-gray-900" title={formatMoney(budget.consumed, budget.currency)}>{formatMoney(budget.consumed, budget.currency)}</p>
         </div>
-        <div className="min-w-0 text-right">
-          <p className="text-xs text-gray-500">{exceeded ? 'Excedido:' : 'Tope:'}</p>
-          <p className={`truncate text-sm font-semibold ${exceeded ? 'text-red-600' : 'text-gray-900'}`} title={formatMoney(exceeded ? amountOverLimit : budget.amount, budget.currency)}>
-            {formatMoney(exceeded ? amountOverLimit : budget.amount, budget.currency)}
+        <div className="shrink-0 text-right">
+          <p className="text-xs text-gray-500">Tope:</p>
+          <p className={`whitespace-nowrap text-sm font-semibold ${exceeded ? 'text-red-600' : 'text-gray-900'}`} title={formatMoney(budget.amount, budget.currency)}>
+            {formatMoney(budget.amount, budget.currency)}
           </p>
         </div>
       </div>

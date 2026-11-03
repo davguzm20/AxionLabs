@@ -1,4 +1,4 @@
-import { ArrowLeft, Info, X } from 'lucide-react';
+import { ArrowLeft, Info, RotateCcw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BudgetCard } from '../components/BudgetCard';
@@ -81,6 +81,19 @@ export function BudgetsPage() {
             <h1 className="truncate text-lg font-semibold text-ink-900">Presupuestos y alertas</h1>
           </div>
           <NotificationBell />
+          <button
+            type="button"
+            aria-label="Reiniciar datos de prueba"
+            title="Reiniciar datos de prueba"
+            onClick={() => {
+              localStorage.removeItem('mock_budgets_v2');
+              localStorage.removeItem('khipubot_chat_messages');
+              window.location.reload();
+            }}
+            className="flex size-11 shrink-0 items-center justify-center rounded-md text-ink-600 transition-colors hover:bg-bg"
+          >
+            <RotateCcw aria-hidden="true" size={18} />
+          </button>
         </header>
 
         {showInfo && (

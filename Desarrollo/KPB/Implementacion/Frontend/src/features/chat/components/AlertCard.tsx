@@ -38,7 +38,7 @@ export function AlertCard({ alert }: AlertCardProps) {
             ? <XCircle aria-hidden="true" className="mt-0.5 h-6 w-6 shrink-0" />
             : <AlertTriangle aria-hidden="true" className="mt-0.5 h-6 w-6 shrink-0" />}
           <div>
-            <h2 id={titleId} className="font-semibold">{alert.title ?? (isDanger ? 'Presupuesto superado' : 'Alerta de presupuesto')}</h2>
+            <h2 id={titleId} className="font-semibold">{isDanger ? '¡Presupuesto excedido!' : 'Alerta de presupuesto'}</h2>
             <p className="mt-1 text-sm leading-5 text-ink-900">{message}</p>
           </div>
         </div>
