@@ -38,8 +38,8 @@ export function useNotifications() {
         return [...recent, ...result.data];
       });
       setPage(1);
-      setPages(result.pagination.pages);
-      setUnreadCount(unreadResult.pagination.total);
+      setPages(result.pagination.total_pages);
+      setUnreadCount(unreadResult.pagination.total_items);
       setError(null);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') return;
@@ -59,7 +59,7 @@ export function useNotifications() {
         return [...current, ...result.data.filter((item) => !known.has(item.id))];
       });
       setPage(nextPage);
-      setPages(result.pagination.pages);
+      setPages(result.pagination.total_pages);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudieron cargar más notificaciones.');

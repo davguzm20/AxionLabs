@@ -4,7 +4,7 @@ import { RotateCcw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChatBubble } from './components/ChatBubble';
 import type { BotMood } from './components/ChatBubble';
-import { AlertCard, type BudgetAlert } from './components/AlertCard';
+import { AlertCard, type ChatAlert } from './components/AlertCard';
 import { ChatInput } from './components/ChatInput';
 import { ConfirmationCard, type Transaction, type TransactionStatus } from './components/ConfirmationCard';
 import { TransactionPreviewCard } from './components/TransactionPreviewCard';
@@ -12,23 +12,39 @@ import { VoiceRecorder } from './voice/VoiceRecorder';
 import { confirmVoicePreview, createVoicePreview } from './voice/voiceService';
 import { confirmReceiptPreview, createReceiptPreview } from './receipt/receiptService';
 import { validateReceiptImage } from './receipt/imageValidation';
-import type { TransactionDraft, TransactionPreview } from './transactionPreview.types';
+import type { Api10SavedTransaction, Api10SavedTransactionResponse, LegacyBudgetAlert, SavedTransactionResponse, TransactionDraft, TransactionPreview } from './transactionPreview.types';
 import { NotificationBell } from '../notifications/components/NotificationBell';
 
 type ChatMessage =
   | { id: string; kind: 'bubble'; author: 'bot' | 'user'; text: string; botMood?: BotMood }
   | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string; idempotencyKey: string; idempotencyPayload?: string; status: TransactionStatus; isSaving?: boolean; saveError?: string }
   | { id: string; kind: 'preview'; source: 'TEXT' | 'VOICE' | 'RECEIPT'; preview: TransactionPreview; suggestedCategoryId?: string; imageFile?: File; isSaving?: boolean; saveError?: string }
-  | { id: string; kind: 'alert'; alert: BudgetAlert };
-type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; budget_alert?: BudgetAlert; wallet_name?: string };
+  | { id: string; kind: 'alert'; alert: ChatAlert };
+type SaveResponse = Api10SavedTransactionResponse | SavedTransactionResponse;
 type ApiError = Error & { status?: number; code?: string };
 
-function highestPriorityAlert(alerts: BudgetAlert[]): BudgetAlert | undefined {
-  return alerts.reduce<BudgetAlert | undefined>((highest, alert) => {
+function highestPriorityAlert(alerts: ChatAlert[]): ChatAlert | undefined {
+  return alerts.reduce<ChatAlert | undefined>((highest, alert) => {
     if (!highest) return alert;
-    const priority = (value: BudgetAlert) => value.priority?.toLocaleLowerCase() === 'high' ? 2 : value.threshold_percentage ?? 0;
+    const priority = (value: ChatAlert) => value.priority?.toLocaleLowerCase() === 'high' ? 2 : value.threshold_percentage ?? 0;
     return priority(alert) > priority(highest) ? alert : highest;
   }, undefined);
+}
+
+function toChatTransaction(transaction: Api10SavedTransaction | SavedTransactionResponse['transaction']): Transaction {
+  if ('wallet' in transaction) {
+    return {
+      id: transaction.id,
+      type: transaction.type.toUpperCase() as Transaction['type'],
+      amount: transaction.amount,
+      currency: transaction.currency,
+      concept: transaction.concept,
+      transaction_date: transaction.occurred_at.slice(0, 10),
+      wallet_id: transaction.wallet.id,
+      category: { ...transaction.category, icon: 'circle-help' },
+    };
+  }
+  return { ...transaction, category: { ...transaction.category, icon: transaction.category.icon ?? 'circle-help' } };
 }
 
 export function ChatPage() {
@@ -129,18 +145,19 @@ export function ChatPage() {
       ? { ...message, idempotencyKey, idempotencyPayload, isSaving: true, saveError: undefined }
       : message));
     try {
-      const response = await api<SaveResponse>('/transactions', {
+      const response = await api<Api10SavedTransactionResponse>('/transactions', {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
-          preview_id: messageId,
-          type: transaction.type,
+          type: transaction.type.toLowerCase(),
           amount: transaction.amount,
           currency: transaction.currency,
           concept: transaction.concept,
-          transaction_date: transaction.transaction_date,
+          occurred_at: `${transaction.transaction_date}T12:00:00-05:00`,
           wallet_id: transaction.wallet_id,
           category_id: transaction.category.id,
+          category_source: transaction.category.source === 'suggested' ? 'suggested' : 'manual',
+          source: 'manual',
         }),
       });
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
@@ -148,9 +165,9 @@ export function ChatPage() {
       setMessages((current) => {
         const confirmationIndex = current.findIndex((message) => message.kind === 'confirmation' && message.id === messageId);
         const next = current.map((message) => message.kind === 'confirmation' && message.id === messageId
-          ? { ...message, transaction: response.transaction, status: 'confirmed' as const, isSaving: false, saveError: undefined }
+          ? { ...message, transaction: toChatTransaction(response.transaction), status: 'confirmed' as const, isSaving: false, saveError: undefined }
           : message);
-        const alert = highestPriorityAlert(response.alerts ?? []);
+        const alert = response.budget_alert;
         if (alert && confirmationIndex >= 0) {
           next.splice(confirmationIndex + 1, 0, {
             id: crypto.randomUUID(),
@@ -236,12 +253,11 @@ export function ChatPage() {
       const idempotencyKey = previewIdempotencyKeys.current.get(messageId) ?? crypto.randomUUID();
       previewIdempotencyKeys.current.set(messageId, idempotencyKey);
       console.log('[Chat] Enviando una transacción al backend.');
-      const response = source === 'TEXT'
-        ? await api<SaveResponse>('/transactions', {
+      const response: SaveResponse = source === 'TEXT'
+        ? await api<Api10SavedTransactionResponse>('/transactions', {
           method: 'POST',
           headers: { 'Idempotency-Key': idempotencyKey },
           body: JSON.stringify({
-            preview_id: preview.preview.preview_id,
             type: transactionDraft.type.toLocaleLowerCase(),
             amount: transactionDraft.amount,
             currency: transactionDraft.currency,
@@ -256,19 +272,12 @@ export function ChatPage() {
         : source === 'VOICE'
           ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft)
           : await confirmReceiptPreview(preview.preview.preview_id, transactionDraft, preview.preview.ocr_text);
-      const savedTransaction: Transaction = {
-        ...response.transaction,
-        category: {
-          ...response.transaction.category,
-          icon: response.transaction.category.icon ?? 'circle-help',
-        },
-      };
+      const savedTransaction = toChatTransaction(response.transaction);
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
       void queryClient.invalidateQueries({ queryKey: ['transactions'] });
       void queryClient.invalidateQueries({ queryKey: ['wallets'] });
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      const budgetAlert = 'budget_alert' in response ? response.budget_alert : undefined;
       previewIdempotencyKeys.current.delete(messageId);
       setMessages((current) => {
         const next = current.map((message) => message.kind === 'preview' && message.id === messageId
@@ -276,12 +285,14 @@ export function ChatPage() {
             id: message.id,
             kind: 'confirmation' as const,
             transaction: savedTransaction,
-            walletName: response.wallet_name ?? 'Monedero',
+            walletName: 'wallet_name' in response ? response.wallet_name ?? 'Monedero' : 'wallet' in response.transaction ? response.transaction.wallet.name : 'Monedero',
             idempotencyKey: crypto.randomUUID(),
             status: 'confirmed' as const,
           }
           : message);
-        const alert = highestPriorityAlert([...(response.alerts ?? []), ...(budgetAlert ? [budgetAlert] : [])]);
+        const legacyAlerts: LegacyBudgetAlert[] = 'alerts' in response ? response.alerts ?? [] : [];
+        const budgetAlert = 'budget_alert' in response ? response.budget_alert : undefined;
+        const alert = highestPriorityAlert([...legacyAlerts, ...(budgetAlert ? [budgetAlert] : [])]);
         if (alert) {
           const index = next.findIndex((message) => message.id === messageId);
           next.splice(index + 1, 0, {

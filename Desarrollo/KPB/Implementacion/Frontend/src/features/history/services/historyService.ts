@@ -42,9 +42,12 @@ export function getTransaction(id: string, signal?: AbortSignal): Promise<Histor
 }
 
 export async function listHistoryCategories(signal?: AbortSignal): Promise<HistoryCategory[]> {
-  const response = await api<HistoryCategory[] | { data: HistoryCategory[] }>('/categories', { signal });
-  const categories = Array.isArray(response) ? response : response.data;
-  return categories.filter((category) => category.status !== 'INACTIVE');
+  const response = await api<{ data: Array<{ id: string; name: string; type: 'expense' | 'income' }> }>('/categories', { signal });
+  return response.data.map((category) => ({
+    ...category,
+    type: category.type.toUpperCase() as HistoryCategory['type'],
+    icon: 'circle-help',
+  }));
 }
 
 export function correctTransaction(id: string, correction: TransactionCorrection): Promise<HistoryTransaction> {

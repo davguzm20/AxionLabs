@@ -1,11 +1,16 @@
-import { Bell, ChevronRight, DollarSign, Lock, PieChart, User } from 'lucide-react';
+import { Bell, ChevronRight, DollarSign, Lock, LogOut, PieChart, User } from 'lucide-react';
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { logout } from '../../auth/authService';
 import { useAlertPreferences } from '../../../hooks/useAlertPreferences';
 import { NotificationBell } from '../../cu08/components/NotificationBell';
 import { useNotificationPreferences } from '../../notifications/hooks/useNotificationPreferences';
 
 export function SettingsPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const { enabled: alertSoundsEnabled, setEnabled: setAlertSoundsEnabled } = useAlertPreferences();
   const {
     preferences,
@@ -17,6 +22,20 @@ export function SettingsPage() {
     saveError,
   } = useNotificationPreferences();
   const emailNotificationsEnabled = preferences?.email_notifications ?? true;
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch {
+      // The local session is cleared even when the server request fails.
+    } finally {
+      window.localStorage.removeItem('access_token');
+      window.localStorage.removeItem('khipubot_chat_messages');
+      queryClient.clear();
+      navigate('/login', { replace: true });
+    }
+  }
 
   return (
     <main className="h-full w-full overflow-y-auto bg-gray-50 px-4 pb-24 sm:px-6">
@@ -72,6 +91,15 @@ export function SettingsPage() {
             </div>
           </div>
         </section>
+
+        <button
+          type="button"
+          onClick={() => void handleLogout()}
+          disabled={isLoggingOut}
+          className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border border-ink-300 bg-white p-4 text-left shadow-sm hover:bg-bg disabled:cursor-wait disabled:opacity-60"
+        >
+          <span className="flex min-w-0 items-center gap-3"><LogOut aria-hidden="true" className="shrink-0 text-ink-500" size={20} /><span className="text-sm font-medium text-gray-800">{isLoggingOut ? 'Cerrando sesión…' : 'Cerrar sesión'}</span></span>
+        </button>
       </div>
     </main>
   );

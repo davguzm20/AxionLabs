@@ -1,26 +1,19 @@
 import { useId } from 'react';
 import { AlertTriangle, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import type { BudgetAlert, LegacyBudgetAlert } from '../transactionPreview.types';
 
-export type BudgetAlert = {
-  id?: string;
-  title?: string;
-  message?: string;
-  body?: string;
-  severity?: string;
-  priority?: 'high' | 'normal' | 'HIGH' | 'NORMAL';
-  threshold_percentage?: number;
-  usage_percentage?: number;
-};
+export type { BudgetAlert } from '../transactionPreview.types';
+export type ChatAlert = BudgetAlert | LegacyBudgetAlert;
 
-type AlertCardProps = { alert: BudgetAlert };
+type AlertCardProps = { alert: ChatAlert };
 
 export function AlertCard({ alert }: AlertCardProps) {
   const titleId = useId();
-  const message = alert.message ?? alert.body ?? 'Se alcanzó un umbral de tu presupuesto.';
+  const message = alert.message;
   const isDanger = alert.priority
     ? alert.priority.toLocaleLowerCase() === 'high'
-    : alert.severity === 'danger' || /excediste|superaste|excedido/i.test(message);
+    : ('severity' in alert && alert.severity === 'danger') || /excediste|superaste|excedido/i.test(message);
   const colorClass = isDanger
     ? 'border-red-500 bg-white text-red-600'
     : 'border-warning-500 bg-white text-warning-600';

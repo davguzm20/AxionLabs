@@ -22,5 +22,5 @@ export interface Notification {
 
 export interface NotificationPage {
   data: Notification[];
-  pagination: { page: number; page_size: number; total: number; pages: number };
+  pagination: { page: number; page_size: number; total_items: number; total_pages: number };
 }

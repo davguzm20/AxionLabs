@@ -1,4 +1,5 @@
 import type { AlertThreshold } from '../types/alert.types';
+import { createApiHeaders } from '../../../lib/api';
 
 const API = '/api/v1';
 
@@ -10,7 +11,7 @@ interface ThresholdResponse {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, headers: createApiHeaders(init?.headers) });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: string }; message?: string } | null;
     throw new Error(body?.error?.message ?? body?.message ?? 'No se pudo guardar la configuración de alertas.');

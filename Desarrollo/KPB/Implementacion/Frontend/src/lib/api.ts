@@ -30,7 +30,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) return undefined as T;
 
   const payload = await response.json().catch(() => undefined) as {
-    error?: { message?: string; code?: string; details?: { field: string; message: string }[] };
+    error?: { message?: string; code?: string; details?: { field: string; issue?: string; message?: string }[]; trace_id?: string };
     message?: string;
   } | undefined;
 
@@ -40,6 +40,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       response.status,
       payload?.error?.code,
       payload?.error?.details,
+      payload?.error?.trace_id,
     );
   }
 

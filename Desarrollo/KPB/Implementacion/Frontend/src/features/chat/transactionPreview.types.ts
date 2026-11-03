@@ -8,6 +8,12 @@ export type CategoryChoice = {
   status?: string;
 };
 
+export type ApiCategoryChoice = {
+  id: string;
+  name: string;
+  type: 'expense' | 'income';
+};
+
 export type WalletChoice = {
   id: string;
   name: string;
@@ -27,6 +33,49 @@ export type TransactionDraft = {
   merchant?: string | null;
   ruc?: string | null;
 };
+
+export type BudgetAlert = {
+  notification_id: string;
+  category: { id: string; name: string };
+  threshold_percentage: number;
+  usage_percentage: number;
+  remaining: string;
+  priority: 'normal' | 'high';
+  message: string;
+};
+
+export type LegacyBudgetAlert = {
+  id?: string;
+  title?: string;
+  message: string;
+  body?: string;
+  severity?: 'warning' | 'danger';
+  priority?: 'normal' | 'high' | 'NORMAL' | 'HIGH';
+  threshold_percentage?: number;
+  usage_percentage?: number;
+};
+
+export interface Api10SavedTransaction {
+  id: string;
+  type: 'expense' | 'income';
+  amount: string;
+  currency: string;
+  concept: string;
+  category: { id: string; name: string; source: string };
+  wallet: { id: string; name: string };
+  occurred_at: string;
+  source: string;
+}
+
+export interface Api10SavedTransactionResponse {
+  transaction: Api10SavedTransaction;
+  confirmation_message: string;
+  balances: {
+    wallet: { id: string; balance: string };
+    category: { id: string; spent_month: string };
+  };
+  budget_alert: BudgetAlert | null;
+}
 
 export type TransactionPreview = {
   preview_id: string;
@@ -60,5 +109,6 @@ export type SavedTransactionResponse = {
     category: CategoryChoice;
   };
   wallet_name?: string;
-  alerts?: Array<{ message: string; severity: 'warning' | 'danger' }>;
+  alerts?: LegacyBudgetAlert[];
+  budget_alert?: LegacyBudgetAlert | null;
 };
