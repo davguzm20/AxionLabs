@@ -58,7 +58,9 @@ def users(monkeypatch) -> dict[str, User]:
 def make_client(users, db, redis_client):
     """Fabrica un TestClient con la infraestructura sustituida por dobles."""
 
-    def factory(*, session=None, redis=None, raise_server_exceptions: bool = True) -> TestClient:
+    def factory(
+        *, session=None, redis=None, raise_server_exceptions: bool = True
+    ) -> TestClient:
         session = db if session is None else session
         redis = redis_client if redis is None else redis
         app.dependency_overrides[get_db] = lambda: session

@@ -42,7 +42,12 @@ def make_unavailable_redis() -> fakeredis.FakeRedis:
 
 def build_user(email: str = EMAIL, **changes) -> User:
     """Rellena lo que PostgreSQL asignaria con server_default."""
-    fields = {"name": "Andrea", "surname": "Quispe", "email": email, "password": HASH} | changes
+    fields = {
+        "name": "Andrea",
+        "surname": "Quispe",
+        "email": email,
+        "password": HASH,
+    } | changes
     user = User(**fields)
     user.user_id = uuid.uuid4()
     user.status = UserStatus.ACTIVO
