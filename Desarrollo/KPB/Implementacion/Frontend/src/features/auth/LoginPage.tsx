@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
-import { api } from '../../lib/api';
+import { login } from './authService';
 import type { ApiError } from '../../lib/errors';
 
 const loginSchema = z.object({
@@ -11,7 +11,6 @@ const loginSchema = z.object({
   password: z.string().min(1, 'Ingresa tu contraseña.'),
 });
 type LoginValues = z.infer<typeof loginSchema>;
-type AuthResponse = { access_token: string; token_type: string; expires_in: number };
 type LoginError = ApiError & { status?: number };
 
 function getLoginMessage(error: LoginError): string {
@@ -39,10 +38,7 @@ export function LoginPage() {
     setSubmitError(undefined);
     setLoading(true);
     try {
-      const response = await api<AuthResponse>('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(values),
-      });
+      const response = await login(values.email, values.password);
       localStorage.setItem('access_token', response.access_token);
       const destination = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
       navigate(destination || '/inicio', { replace: true });

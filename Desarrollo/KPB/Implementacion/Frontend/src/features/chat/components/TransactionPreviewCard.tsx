@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { EditTransactionModal, type EditTransactionValues } from './EditTransactionModal';
 import { api } from '../../../lib/api';
-import type { CategoryChoice, TransactionDraft, TransactionPreview, WalletChoice } from '../transactionPreview.types';
+import type { ApiCategoryChoice, CategoryChoice, TransactionDraft, TransactionPreview, WalletChoice } from '../transactionPreview.types';
 
 type TransactionPreviewCardProps = {
   source: 'TEXT' | 'VOICE' | 'RECEIPT';
@@ -69,11 +69,15 @@ export function TransactionPreviewCard({
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<ListResponse<CategoryChoice>>('/categories?status=ACTIVE'),
+      api<ListResponse<ApiCategoryChoice>>('/categories?status=ACTIVE'),
       api<ListResponse<WalletChoice>>('/wallets?status=ACTIVE'),
     ]).then(([categoryResponse, walletResponse]) => {
       if (!active) return;
-      const categoryItems = responseItems(categoryResponse);
+      const categoryItems: CategoryChoice[] = responseItems(categoryResponse).map((category) => ({
+        ...category,
+        type: category.type.toUpperCase() as CategoryChoice['type'],
+        icon: 'circle-help',
+      }));
       const walletItems = responseItems(walletResponse);
       setCategories(categoryItems);
       setWallets(walletItems);

@@ -52,8 +52,8 @@ export async function getWallet(id: string, signal?: AbortSignal): Promise<Walle
 
 export async function getWalletTransactionCount(id: string, signal?: AbortSignal): Promise<number> {
   const query = new URLSearchParams({ wallet_id: id, date_from: '2000-01-01', date_to: '2999-12-31', page: '1', page_size: '1' });
-  const response = await api<{ meta?: { total?: number }; data?: unknown[] }>(`/transactions?${query}`, { signal });
-  return response.meta?.total ?? response.data?.length ?? 0;
+  const response = await api<{ pagination?: { total_items: number }; data?: unknown[] }>(`/transactions?${query}`, { signal });
+  return response.pagination?.total_items ?? response.data?.length ?? 0;
 }
 
 export async function updateWallet(id: string, payload: UpdateWalletPayload): Promise<Wallet> {
