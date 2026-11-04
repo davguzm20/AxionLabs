@@ -1,22 +1,28 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { LoaderCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Pencil } from 'lucide-react';
+import { EditTransactionModal, type EditTransactionValues } from './EditTransactionModal';
 import { api } from '../../../lib/api';
-import type { CategoryChoice, TransactionDraft, TransactionPreview, WalletChoice } from '../transactionPreview.types';
+import type { ApiCategoryChoice, CategoryChoice, TransactionDraft, TransactionPreview, WalletChoice } from '../transactionPreview.types';
 
 type TransactionPreviewCardProps = {
-  source: 'VOICE' | 'RECEIPT';
+  source: 'TEXT' | 'VOICE' | 'RECEIPT';
   preview: TransactionPreview;
   imageFile?: File;
   isSaving: boolean;
   saveError?: string;
+  onEdit: (draft: TransactionDraft, category: CategoryChoice) => void;
   onConfirm: (draft: TransactionDraft) => void;
-  onCancel: () => void;
 };
 
 type ListResponse<T> = { data: T[] } | T[];
 
 function responseItems<T>(response: ListResponse<T>): T[] {
   return Array.isArray(response) ? response : response.data;
+}
+
+function normalizeAmount(value: string): string {
+  const [whole = '0', fraction = ''] = value.trim().replace(',', '.').split('.');
+  return `${whole}.${fraction.padEnd(2, '0').slice(0, 2)}`;
 }
 
 function initialDraft(preview: TransactionPreview): TransactionDraft {
@@ -40,14 +46,15 @@ export function TransactionPreviewCard({
   imageFile,
   isSaving,
   saveError,
+  onEdit,
   onConfirm,
-  onCancel,
 }: TransactionPreviewCardProps) {
   const [draft, setDraft] = useState(() => initialDraft(preview));
   const [categories, setCategories] = useState<CategoryChoice[]>([]);
   const [wallets, setWallets] = useState<WalletChoice[]>([]);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const titleId = 'preview-title-' + preview.preview_id;
   const categoryOptions = categories.filter((category) => category.type === draft.type && category.status !== 'INACTIVE');
   const previewCategory = preview.extracted.category;
@@ -62,11 +69,15 @@ export function TransactionPreviewCard({
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<ListResponse<CategoryChoice>>('/categories?status=ACTIVE'),
+      api<ListResponse<ApiCategoryChoice>>('/categories?status=ACTIVE'),
       api<ListResponse<WalletChoice>>('/wallets?status=ACTIVE'),
     ]).then(([categoryResponse, walletResponse]) => {
       if (!active) return;
-      const categoryItems = responseItems(categoryResponse);
+      const categoryItems: CategoryChoice[] = responseItems(categoryResponse).map((category) => ({
+        ...category,
+        type: category.type.toUpperCase() as CategoryChoice['type'],
+        icon: 'circle-help',
+      }));
       const walletItems = responseItems(walletResponse);
       setCategories(categoryItems);
       setWallets(walletItems);
@@ -92,28 +103,24 @@ export function TransactionPreviewCard({
     return () => URL.revokeObjectURL(objectUrl);
   }, [imageFile]);
 
-  function update<K extends keyof TransactionDraft>(key: K, value: TransactionDraft[K]) {
-    setDraft((current) => ({ ...current, [key]: value }));
-  }
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!draft.wallet_id || !draft.category_id || !draft.amount || !draft.concept.trim()) return;
-    onConfirm({
+  function saveEdits(values: EditTransactionValues) {
+    const updatedDraft: TransactionDraft = {
       ...draft,
-      amount: Number(draft.amount).toFixed(2),
-      concept: draft.concept.trim(),
-      merchant: draft.merchant?.trim() || null,
-      ruc: draft.ruc?.trim() || null,
-    });
+      amount: normalizeAmount(values.amount),
+      concept: values.concept.trim(),
+      category_id: values.category_id,
+    };
+    setDraft(updatedDraft);
+    onEdit(updatedDraft, categoriesForSelect.find(({ id }) => id === values.category_id) ?? previewCategory);
+    setIsEditing(false);
   }
 
   return (
-    <div className="flex items-start gap-3">
-      <img src="/bot-sorprendido.png" alt="" className="mt-1 h-14 w-14 shrink-0 rounded-full object-cover" />
-      <section aria-labelledby={titleId} className="min-w-0 max-w-[34rem] flex-1 rounded-xl border border-ink-300 bg-white p-4 shadow-sm">
+    <div className="flex items-start gap-4">
+      <img src="/bot-sorprendido.png" alt="" className="relative z-0 mt-1 h-12 w-12 shrink-0 rounded-full object-cover sm:h-14 sm:w-14" />
+      <section aria-labelledby={titleId} className="relative z-10 min-w-0 max-w-[34rem] flex-1 rounded-xl border border-ink-300 bg-white p-4 shadow-sm">
         <h2 id={titleId} className="font-semibold text-ink-900">
-          {source === 'VOICE' ? 'Revisa la transacción por voz' : 'Revisa los datos del comprobante'}
+          {source === 'TEXT' ? 'Revisa tu transacción' : source === 'VOICE' ? 'Revisa la transacción por voz' : 'Revisa los datos del comprobante'}
         </h2>
 
         {preview.transcript && (
@@ -132,90 +139,21 @@ export function TransactionPreviewCard({
           </details>
         )}
 
-        <form onSubmit={submit} className="mt-4 space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="block text-sm font-medium text-ink-700">
-              Tipo
-              <select value={draft.type} onChange={(event) => {
-                const type = event.target.value as TransactionDraft['type'];
-                setDraft((current) => ({ ...current, type, category_id: '' }));
-              }} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 bg-white px-3">
-                <option value="EXPENSE">Gasto</option>
-                <option value="INCOME">Ingreso</option>
-              </select>
-            </label>
-            <label className="block text-sm font-medium text-ink-700">
-              Monto
-              <input type="number" inputMode="decimal" min="0.01" step="0.01" required value={draft.amount} onChange={(event) => update('amount', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 px-3" />
-            </label>
-            <label className="block text-sm font-medium text-ink-700">
-              Moneda
-              <select value={draft.currency} onChange={(event) => {
-                const currency = event.target.value;
-                setDraft((current) => {
-                  const matchingWallets = wallets.filter((wallet) => wallet.currency === currency && wallet.status !== 'INACTIVE');
-                  if (matchingWallets.some((wallet) => wallet.id === current.wallet_id)) return { ...current, currency };
-                  const defaultWallet = matchingWallets.find((wallet) => wallet.is_default) ?? matchingWallets[0];
-                  return { ...current, currency, wallet_id: defaultWallet?.id ?? '' };
-                });
-              }} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 bg-white px-3">
-                <option value="PEN">Soles (PEN)</option>
-                <option value="USD">Dólares (USD)</option>
-              </select>
-            </label>
-            <label className="block text-sm font-medium text-ink-700">
-              Fecha
-              <input type="date" required value={draft.transaction_date} onChange={(event) => update('transaction_date', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 px-3" />
-            </label>
-          </div>
+        <p className="mt-3 text-2xl font-bold text-brand-700">{draft.currency === 'PEN' ? 'S/' : '$'} {draft.amount}</p>
+        <dl className="mt-3 space-y-2 text-sm text-ink-700">
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Concepto</dt><dd className="min-w-0 max-w-[70%] break-words text-right">{draft.concept}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Categoría</dt><dd className="text-right">{categoriesForSelect.find(({ id }) => id === draft.category_id)?.name ?? previewCategory.name}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Monedero</dt><dd className="text-right">{walletOptions.find(({ id }) => id === draft.wallet_id)?.name ?? 'Monedero'}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="shrink-0">Fecha</dt><dd className="text-right">{new Date(`${draft.transaction_date}T12:00:00`).toLocaleDateString('es-PE', { day: 'numeric', month: 'short', year: 'numeric' })}</dd></div>
+        </dl>
+        {optionsError && <p role="alert" className="mt-3 text-sm text-danger-600">{optionsError}</p>}
+        {saveError && <p role="alert" className="mt-3 rounded-md bg-red-50 p-3 text-sm text-danger-700">{saveError}</p>}
+        <div className="mt-4 flex w-full flex-row gap-2">
+          <button type="button" onClick={() => setIsEditing(true)} disabled={isSaving} className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border border-ink-300 px-3 text-sm font-medium text-ink-900 disabled:opacity-50"><Pencil aria-hidden="true" size={16} />Editar</button>
+          <button type="button" onClick={() => onConfirm(draft)} disabled={isSaving || !selectedCategoryAvailable || !selectedWalletAvailable} className="min-h-11 min-w-0 flex-1 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">{isSaving ? 'Guardando…' : 'Aceptar'}</button>
+        </div>
+        {isEditing && <EditTransactionModal amount={draft.amount} concept={draft.concept} categoryId={draft.category_id} categories={categoriesForSelect} onClose={() => setIsEditing(false)} onSave={saveEdits} />}
 
-          <label className="block text-sm font-medium text-ink-700">
-            Concepto
-            <input type="text" required maxLength={200} value={draft.concept} onChange={(event) => update('concept', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 px-3" />
-          </label>
-
-          {source === 'RECEIPT' && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="block text-sm font-medium text-ink-700">
-                Comercio
-                <input type="text" maxLength={200} value={draft.merchant ?? ''} onChange={(event) => update('merchant', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 px-3" />
-              </label>
-              <label className="block text-sm font-medium text-ink-700">
-                RUC
-                <input type="text" inputMode="numeric" pattern="[0-9]{11}" title="El RUC debe tener 11 dígitos." maxLength={11} value={draft.ruc ?? ''} onChange={(event) => update('ruc', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 px-3" />
-              </label>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="block text-sm font-medium text-ink-700">
-              Categoría
-              <select required value={draft.category_id} onChange={(event) => update('category_id', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 bg-white px-3">
-                <option value="">Selecciona una categoría</option>
-                {categoriesForSelect.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-              </select>
-            </label>
-            <label className="block text-sm font-medium text-ink-700">
-              Monedero
-              <select required value={draft.wallet_id} onChange={(event) => update('wallet_id', event.target.value)} disabled={isSaving} className="mt-1 min-h-11 w-full rounded-md border border-ink-300 bg-white px-3">
-                <option value="">Selecciona un monedero</option>
-                {walletOptions.map((wallet) => <option key={wallet.id} value={wallet.id}>{wallet.name} · {wallet.currency}</option>)}
-              </select>
-            </label>
-          </div>
-
-          {categoriesForSelect.length === 0 && <p className="text-sm text-danger-600">No hay categorías activas disponibles para este tipo.</p>}
-          {walletOptions.length === 0 && <p className="text-sm text-danger-600">No hay monederos activos en {draft.currency}.</p>}
-          {optionsError && <p role="alert" className="text-sm text-danger-600">{optionsError}</p>}
-          {saveError && <p role="alert" className="rounded-md bg-red-50 p-3 text-sm text-danger-700">{saveError}</p>}
-          <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
-            <button type="button" onClick={onCancel} disabled={isSaving} className="min-h-11 rounded-md border border-ink-300 px-4 text-sm font-medium text-ink-900 disabled:opacity-50">Cancelar</button>
-            <button type="submit" disabled={isSaving || !selectedCategoryAvailable || !selectedWalletAvailable} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50">
-              {isSaving && <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />}
-              {isSaving ? 'Guardando…' : 'Confirmar y guardar'}
-            </button>
-          </div>
-        </form>
       </section>
     </div>
   );
