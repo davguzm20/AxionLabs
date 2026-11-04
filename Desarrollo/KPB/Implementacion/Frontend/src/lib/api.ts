@@ -2,10 +2,10 @@ import { ApiError } from './errors';
 
 export { ApiError } from './errors';
 
-const apiBaseUrl = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
 
 export function buildApiUrl(path: string): string {
-  return apiBaseUrl + path;
+  return API_BASE_URL + path;
 }
 
 export function createApiHeaders(headers?: HeadersInit): Headers {
@@ -15,6 +15,11 @@ export function createApiHeaders(headers?: HeadersInit): Headers {
     requestHeaders.set('Authorization', 'Bearer ' + accessToken);
   }
   return requestHeaders;
+}
+
+export async function apiRaw(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = createApiHeaders(init.headers);
+  return fetch(buildApiUrl(path), { ...init, headers });
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

@@ -1,4 +1,4 @@
-import { buildApiUrl, createApiHeaders } from '../../../lib/api';
+import { apiRaw } from '../../../lib/api';
 import type { NotificationStreamEvent } from '../types/notification.types';
 
 export type NotificationStreamStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -50,9 +50,9 @@ export async function consumeNotificationStream(
   while (!signal.aborted) {
     onStatus(attempt === 0 ? 'connecting' : 'reconnecting');
     try {
-      const response = await fetch(buildApiUrl('/notifications/stream'), {
+      const response = await apiRaw('/notifications/stream', {
         method: 'GET',
-        headers: createApiHeaders({ Accept: 'text/event-stream' }),
+        headers: { Accept: 'text/event-stream' },
         cache: 'no-store',
         signal,
       });
