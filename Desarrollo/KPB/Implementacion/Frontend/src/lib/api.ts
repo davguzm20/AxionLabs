@@ -17,6 +17,11 @@ export function createApiHeaders(headers?: HeadersInit): Headers {
   return requestHeaders;
 }
 
+export async function apiRaw(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = createApiHeaders(init.headers);
+  return fetch(buildApiUrl(path), { ...init, headers });
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = createApiHeaders(init.headers);
   const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;

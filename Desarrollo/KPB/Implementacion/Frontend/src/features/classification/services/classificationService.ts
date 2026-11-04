@@ -5,9 +5,7 @@ import type {
   ClassificationRequest,
   ClassificationResponse,
 } from '../types/classification.types';
-import { createApiHeaders } from '../../../lib/api';
-
-const API_BASE = '/api/v1';
+import { apiRaw } from '../../../lib/api';
 
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -18,7 +16,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export async function getCategories(signal?: AbortSignal): Promise<Category[]> {
-  const response = await fetch(`${API_BASE}/categories`, { headers: createApiHeaders(), signal });
+  const response = await apiRaw('/categories', { signal });
   const result = await parseResponse<CategoriesResponse>(response);
   return result.data.map((category: ApiCategory) => ({
     ...category,
@@ -31,9 +29,9 @@ export async function classifyTransaction(
   request: ClassificationRequest,
   signal?: AbortSignal,
 ): Promise<ClassificationResponse> {
-  const response = await fetch(`${API_BASE}/categories/suggestions`, {
+  const response = await apiRaw('/categories/suggestions', {
     method: 'POST',
-    headers: createApiHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
     signal,
   });
