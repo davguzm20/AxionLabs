@@ -5,12 +5,14 @@ import { http, HttpResponse } from 'msw';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../mocks/server';
+import { api } from '../../lib/api';
 import { resetFrontendState } from '../../test/resetFrontendState';
 import { SettingsPage } from '../settings/pages/SettingsPage';
 import { ForgotPasswordPage } from './ForgotPasswordPage';
 import { LoginPage } from './LoginPage';
 import { ProtectedRoute } from './ProtectedRoute';
 import { ResetPasswordPage } from './ResetPasswordPage';
+import { SessionExpiryHandler } from './SessionExpiryHandler';
 
 vi.mock('../cu08/components/NotificationBell', () => ({ NotificationBell: () => null }));
 vi.mock('../notifications/services/notificationService', () => ({
@@ -28,6 +30,7 @@ function CurrentPath() {
 function AuthRouter({ initialPath = '/login', state }: { initialPath?: string; state?: unknown }) {
   return (
     <MemoryRouter initialEntries={[{ pathname: initialPath, state }]}>
+      <SessionExpiryHandler />
       <CurrentPath />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
@@ -95,8 +98,7 @@ describe('CU01 — autenticación', () => {
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login');
   });
 
-  // DEFECTO-FRONT: la pantalla y el mock dicen “Inténtalo”; API-01 exige “Inténtelo”.
-  it.skip('C01-02b: muestra el texto exacto de INVALID_CREDENTIALS definido por API-01', async () => {
+  it('C01-02b: muestra el texto exacto de INVALID_CREDENTIALS definido por API-01', async () => {
     const user = userEvent.setup();
     renderAuth();
     await user.type(screen.getByLabelText(/^Correo/i), 'no-existe@example.test');
@@ -266,12 +268,20 @@ describe('CU01 — autenticación', () => {
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login');
   });
 
-  // DEFECTO-FRONT: no hay un manejador global que termine la sesión por 401 SESSION_EXPIRED.
-  it.skip('C01-13: redirige a login al recibir 401 SESSION_EXPIRED', async () => {
+  it('C01-13: redirige a login al recibir 401 SESSION_EXPIRED', async () => {
     server.use(http.get('*/api/v1/protected-resource', () => contractError(401, 'SESSION_EXPIRED', 'La sesión expiró.')));
     localStorage.setItem('access_token', 'token-vencido');
-    const response = await fetch(`${API}/protected-resource`, { headers: { Authorization: 'Bearer token-vencido' } });
-    expect(response.status).toBe(401);
+    localStorage.setItem('khipubot_chat_messages', '[]');
+    localStorage.setItem('mock_budgets_v2', '[{"preserve":true}]');
+    const { queryClient } = renderAuth('/inicio');
+    queryClient.setQueryData(['privado'], { value: 'privado' });
+    await expect(api('/protected-resource')).rejects.toMatchObject({ status: 401, code: 'SESSION_EXPIRED' });
+    await waitFor(() => expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Tu sesión expiró. Inicia sesión nuevamente.');
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(localStorage.getItem('khipubot_chat_messages')).toBeNull();
+    expect(localStorage.getItem('mock_budgets_v2')).toBe('[{"preserve":true}]');
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login');
   });
 });

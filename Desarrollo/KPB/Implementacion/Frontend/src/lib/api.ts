@@ -35,6 +35,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   } | undefined;
 
   if (!response.ok) {
+    if (payload?.error?.code === 'SESSION_EXPIRED'
+      && headers.has('Authorization')
+      && !/\/auth\/(?:login|logout)(?:\?|$)/u.test(buildApiUrl(path))) {
+      window.dispatchEvent(new CustomEvent('khipubot:session-expired', { detail: { message: payload.error.message } }));
+    }
     throw new ApiError(
       payload?.error?.message || payload?.message || 'No se pudo completar la solicitud. Inténtalo nuevamente.',
       response.status,

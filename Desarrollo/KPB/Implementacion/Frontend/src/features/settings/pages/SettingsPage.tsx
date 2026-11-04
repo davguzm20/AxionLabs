@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { logout } from '../../auth/authService';
+import { clearLocalSession } from '../../auth/session';
 import { useAlertPreferences } from '../../../hooks/useAlertPreferences';
 import { NotificationBell } from '../../cu08/components/NotificationBell';
 import { useNotificationPreferences } from '../../notifications/hooks/useNotificationPreferences';
@@ -30,9 +31,7 @@ export function SettingsPage() {
     } catch {
       // The local session is cleared even when the server request fails.
     } finally {
-      window.localStorage.removeItem('access_token');
-      window.localStorage.removeItem('khipubot_chat_messages');
-      queryClient.clear();
+      clearLocalSession(queryClient);
       navigate('/login', { replace: true });
     }
   }

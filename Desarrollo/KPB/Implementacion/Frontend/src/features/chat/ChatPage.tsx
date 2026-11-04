@@ -73,6 +73,7 @@ export function ChatPage() {
   const [sending, setSending] = useState(false);
   const [voiceRecorderOpen, setVoiceRecorderOpen] = useState(false);
   const [retryText, setRetryText] = useState<string>();
+  const [textValidationError, setTextValidationError] = useState<string>();
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previewIdempotencyKeys = useRef(new Map<string, string>());
@@ -100,6 +101,11 @@ export function ChatPage() {
   async function sendText(text: string) {
     const value = text.trim();
     if (!value || sending) return;
+    if (value.length > 500) {
+      setTextValidationError('El texto no puede superar 500 caracteres.');
+      return;
+    }
+    setTextValidationError(undefined);
 
     setMessages((current) => [...current.slice(-48), { id: crypto.randomUUID(), kind: 'bubble', author: 'user', text: value }]);
     setSending(true);
@@ -116,7 +122,7 @@ export function ChatPage() {
       const message = isMissingAmount
         ? 'No pude identificar el monto. \u00bfCu\u00e1nto fue el gasto/ingreso?'
         : apiError.code === 'NLP_UNAVAILABLE'
-          ? 'El servicio no est\u00e1 disponible. Int\u00e9ntalo nuevamente.'
+          ? apiError.message || 'El servicio no est\u00e1 disponible. Por favor intente nuevamente'
           : apiError.message || 'No pude registrar la transacci\u00f3n. Int\u00e9ntalo nuevamente.';
       setMessages((current) => [...current.slice(-49), {
         id: crypto.randomUUID(),
@@ -369,9 +375,10 @@ export function ChatPage() {
       </div>
 
       <div className="shrink-0 border-t border-ink-300 bg-white p-4">
+        {textValidationError && <p role="alert" className="mb-2 text-sm text-danger-600">{textValidationError}</p>}
         <ChatInput
           value={draft}
-          onChange={setDraft}
+          onChange={(value) => { setDraft(value); if (value.length > 0 && value.length <= 500) setTextValidationError(undefined); }}
           onSend={sendText}
           onVoice={() => setVoiceRecorderOpen(true)}
           onReceiptFile={sendReceipt}

@@ -15,7 +15,7 @@ type LoginError = ApiError & { status?: number };
 
 function getLoginMessage(error: LoginError): string {
   switch (error.status) {
-    case 401: return 'Correo o contraseña incorrectos. Inténtalo de nuevo.';
+    case 401: return 'Correo o contraseña incorrectos. Inténtelo de nuevo.';
     case 423: return 'Tu cuenta se bloqueó por 30 minutos. Te enviamos un correo.';
     case 403: return 'Tu cuenta está inactiva. Contacta a soporte para recibir ayuda.';
     case 429: return 'Demasiadas solicitudes. Intenta en 30 s.';
@@ -26,6 +26,7 @@ function getLoginMessage(error: LoginError): string {
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const sessionExpired = (location.state as { sessionExpired?: boolean } | null)?.sessionExpired;
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -92,6 +93,7 @@ export function LoginPage() {
               {errors.password && <p id="password-error" className="mt-1 text-small text-danger">{errors.password.message}</p>}
             </div>
             {submitError && <p role="alert" className="rounded-md border border-danger px-3 py-2 text-small text-danger">{submitError}</p>}
+            {sessionExpired && <p role="alert" className="rounded-md border border-danger px-3 py-2 text-small text-danger">Tu sesión expiró. Inicia sesión nuevamente.</p>}
             <button
               type="submit" disabled={loading} aria-busy={loading}
               className="min-h-[52px] w-full rounded-md bg-brand-600 px-4 font-semibold text-white hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-wait disabled:opacity-70"

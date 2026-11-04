@@ -1337,7 +1337,7 @@ export const handlers = [
     const body = await request.json() as { email?: string; password?: string; device?: { platform?: string; name?: string } };
     if (!body.device?.platform) return mockErrorResponse(400, 'VALIDATION_ERROR', 'Indica la plataforma del dispositivo.', [{ field: 'device.platform', issue: 'required' }]);
     if (body.email !== 'demo@test.com' || body.password !== '123456') {
-      return HttpResponse.json({ error: { code: 'INVALID_CREDENTIALS', message: 'Correo o contraseña incorrectos. Inténtalo de nuevo.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 401 });
+      return HttpResponse.json({ error: { code: 'INVALID_CREDENTIALS', message: 'Correo o contraseña incorrectos. Inténtelo de nuevo.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 401 });
     }
 
     return HttpResponse.json({

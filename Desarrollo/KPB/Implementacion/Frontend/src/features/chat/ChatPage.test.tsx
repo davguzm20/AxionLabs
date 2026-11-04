@@ -68,8 +68,7 @@ describe('CU02 — texto libre', () => {
     expect(screen.queryByText('Revisa tu transacción')).not.toBeInTheDocument();
   });
 
-  // DEFECTO-FRONT: ChatPage.tsx:119 transforma el mensaje del API en “Inténtalo nuevamente.”
-  it.skip('C02-05a: muestra exactamente el mensaje contractual del servicio caído', async () => {
+  it('C02-05a: muestra exactamente el mensaje contractual del servicio caído', async () => {
     server.use(http.post('*/api/v1/extractions/text', () => apiError(503, 'NLP_UNAVAILABLE', 'El servicio no está disponible. Por favor intente nuevamente')));
     await send('falla 15 soles'); expect(await screen.findByText('El servicio no está disponible. Por favor intente nuevamente')).toBeInTheDocument();
   });
@@ -91,12 +90,11 @@ describe('CU02 — texto libre', () => {
     await waitFor(() => expect(received).toHaveLength(500));
   });
 
-  // DEFECTO-FRONT: API-08 exige 1 a 500 caracteres (400 VALIDATION_ERROR); el textarea no limita su longitud.
-  it.skip('C02-06c: texto de 501 caracteres se rechaza en el cliente o por validación', async () => {
-    let received = ''; server.use(http.post('*/api/v1/extractions/text', async ({ request }) => { received = ((await request.json()) as { text: string }).text; return apiError(422, 'VALIDATION_ERROR', 'Escribe entre 1 y 500 caracteres.'); }));
+  it('C02-06c: texto de 501 caracteres muestra aviso y no se envía', async () => {
+    let calls = 0; server.use(http.post('*/api/v1/extractions/text', () => { calls++; return HttpResponse.json({}); }));
     const user = userEvent.setup(); renderChat(); const input = screen.getByRole('textbox', { name: /gastos o ingresos/i });
     fireEvent.change(input, { target: { value: `15 ${'x'.repeat(498)}` } }); await user.click(screen.getByRole('button', { name: 'Enviar' }));
-    await waitFor(() => expect(received).toHaveLength(501));
+    expect(await screen.findByRole('alert')).toHaveTextContent('El texto no puede superar 500 caracteres.'); expect(calls).toBe(0);
   });
 
   it('C02-07: edición actualiza la vista previa sin HTTP adicional', async () => {
@@ -118,8 +116,7 @@ describe('CU02 — texto libre', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
 
-  // DEFECTO-FRONT: API-10 exige monto > 0; el esquema del modal valida formato, pero no rechaza "0".
-  it.skip('C02-08b: rechaza monto cero en el modal', async () => {
+  it('C02-08b: rechaza monto cero en el modal', async () => {
     const user = await send('gasté 15 soles en almuerzo'); await user.click(await screen.findByRole('button', { name: 'Editar' }));
     const dialog = screen.getByRole('dialog'); const amount = within(dialog).getByLabelText(/^Monto/i);
     await user.clear(amount); await user.type(amount, '0'); await user.click(within(dialog).getByRole('button', { name: 'Guardar cambios' }));

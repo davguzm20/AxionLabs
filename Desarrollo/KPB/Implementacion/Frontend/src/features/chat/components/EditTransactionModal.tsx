@@ -6,7 +6,9 @@ import { z } from 'zod';
 import type { CategoryChoice } from '../transactionPreview.types';
 
 const editTransactionSchema = z.object({
-  amount: z.string().trim().regex(/^\d{1,8}(?:\.\d{1,2})?$/, 'Ingresa un monto válido con hasta dos decimales.'),
+  amount: z.string().trim()
+    .regex(/^\d{1,8}(?:\.\d{1,2})?$/, 'Ingresa un monto válido con hasta dos decimales.')
+    .regex(/^(?!0+(?:\.0{1,2})?$).+$/, 'Ingresa un monto válido con hasta dos decimales.'),
   concept: z.string().trim().min(1, 'Ingresa un concepto.').max(200, 'El concepto no puede superar 200 caracteres.'),
   category_id: z.string().min(1, 'Selecciona una categoría.'),
 });
