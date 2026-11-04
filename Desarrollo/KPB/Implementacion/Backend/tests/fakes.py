@@ -1,7 +1,13 @@
-"""Datos y utilidades compartidas por la suite del backend."""
+"""Datos y dobles de prueba compartidos por la suite del backend.
+
+Los fakes viven en memoria (usuarios, monederos y categorias) y los helpers
+arman objetos sin PostgreSQL. Los mocks de comportamiento se crean en cada
+prueba con `monkeypatch` o `MagicMock`.
+"""
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import fakeredis
@@ -9,13 +15,19 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
-from app.entities import AccessLog, User, UserStatus
+from app.entities import (
+    AccessLog,
+    Category,
+    Currency,
+    User,
+    UserStatus,
+    Wallet,
+    WalletType,
+)
 
 EMAIL = "andrea@example.com"
 PASSWORD = "Secreta123"
 SECRET = "x" * 32
-
-# Se calcula una sola vez porque Argon2id tarda unos 100 ms
 HASH = hash_password(PASSWORD)
 
 
@@ -42,7 +54,12 @@ def make_unavailable_redis() -> fakeredis.FakeRedis:
 
 def build_user(email: str = EMAIL, **changes) -> User:
     """Rellena lo que PostgreSQL asignaria con server_default."""
-    fields = {"name": "Andrea", "surname": "Quispe", "email": email, "password": HASH} | changes
+    fields = {
+        "name": "Andrea",
+        "surname": "Quispe",
+        "email": email,
+        "password": HASH,
+    } | changes
     user = User(**fields)
     user.user_id = uuid.uuid4()
     user.status = UserStatus.ACTIVO
@@ -54,6 +71,36 @@ def create_user(table: dict[str, User], email: str = EMAIL) -> User:
     user = build_user(email)
     table[email] = user
     return user
+
+
+def build_category(name: str = "Alimentación", **changes) -> Category:
+    """Categoria en memoria con los campos que PostgreSQL rellenaria."""
+    category = Category(name=name, **changes)
+    category.category_id = uuid.uuid4()
+    category.created_at = datetime.now(UTC)
+    return category
+
+
+def build_wallet(
+    user_id: uuid.UUID,
+    balance: str = "200.00",
+    currency: Currency = Currency.PEN,
+    **changes,
+) -> Wallet:
+    """Monedero en memoria con saldo inicial y actual iguales."""
+    fields = {
+        "user_id": user_id,
+        "name": "Efectivo",
+        "type": WalletType.EFECTIVO,
+        "currency": currency,
+        "initial_balance": Decimal(balance),
+        "current_balance": Decimal(balance),
+    } | changes
+    wallet = Wallet(**fields)
+    wallet.wallet_id = uuid.uuid4()
+    wallet.created_at = datetime.now(UTC)
+    wallet.updated_at = datetime.now(UTC)
+    return wallet
 
 
 def error_code(response) -> str:
