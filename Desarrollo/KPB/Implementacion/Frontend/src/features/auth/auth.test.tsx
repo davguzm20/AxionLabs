@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../mocks/server';
 import { api } from '../../lib/api';
 import { resetFrontendState } from '../../test/resetFrontendState';
+import { deferred } from '../../test/cu01Cu02TestUtils';
 import { SettingsPage } from '../settings/pages/SettingsPage';
 import { ForgotPasswordPage } from './ForgotPasswordPage';
 import { LoginPage } from './LoginPage';
@@ -73,8 +74,8 @@ describe('CU01 — autenticación', () => {
       return HttpResponse.json({ access_token: 'token-de-sesion', token_type: 'Bearer', inactivity_timeout_seconds: 1200, user: { id: 'user-test-1', email: 'persona@example.test' } });
     }));
     renderAuth();
-    await user.type(screen.getByLabelText(/^Correo/i), 'persona@example.test');
-    await user.type(screen.getByLabelText(/^Contrase/i), 'Clave1234');
+    fireEvent.change(screen.getByLabelText(/^Correo/i), { target: { value: 'persona@example.test' } });
+    fireEvent.change(screen.getByLabelText(/^Contrase/i), { target: { value: 'Clave1234' } });
     await user.click(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
     expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/inicio');
@@ -88,9 +89,10 @@ describe('CU01 — autenticación', () => {
     const messages: string[] = [];
     for (const email of ['demo@test.com', 'no-existe@example.test']) {
       await user.clear(screen.getByLabelText(/^Correo/i));
-      await user.type(screen.getByLabelText(/^Correo/i), email);
-      await user.type(screen.getByLabelText(/^Contrase/i), 'incorrecta');
+      fireEvent.change(screen.getByLabelText(/^Correo/i), { target: { value: email } });
+      fireEvent.change(screen.getByLabelText(/^Contrase/i), { target: { value: 'incorrecta' } });
       await user.click(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
+      await waitFor(() => expect(screen.getByLabelText(/^Contrase/i)).toHaveValue(''));
       messages.push((await screen.findByRole('alert')).textContent ?? '');
     }
     expect(messages[0]).toBe(messages[1]);
@@ -177,7 +179,7 @@ describe('CU01 — autenticación', () => {
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/reset-password');
   });
 
-  it('C01-08: presenta PASSWORD_MISMATCH y no navega', async () => {
+  it('C01-08: permanece en el formulario si el reset rechaza PASSWORD_MISMATCH', async () => {
     const recoveryId = await createRecoveryId();
     server.use(
       http.post('*/api/v1/auth/password/verify-code', () => HttpResponse.json({ reset_token: 'reset-test-token', reset_token_expires_in_seconds: 300 })),
@@ -193,7 +195,7 @@ describe('CU01 — autenticación', () => {
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/reset-password');
   });
 
-  it('C01-09: presenta PASSWORD_POLICY_VIOLATION y no navega', async () => {
+  it('C01-09: permanece en el formulario si el reset rechaza PASSWORD_POLICY_VIOLATION', async () => {
     const recoveryId = await createRecoveryId();
     server.use(
       http.post('*/api/v1/auth/password/verify-code', () => HttpResponse.json({ reset_token: 'reset-test-token', reset_token_expires_in_seconds: 300 })),
@@ -224,15 +226,7 @@ describe('CU01 — autenticación', () => {
     expect(resetStatus).toBe(204);
   });
 
-  // DEFECTO-MOCK: el reset simulado no persiste la contraseña nueva para el siguiente login.
-  it.skip('C01-10: permite iniciar sesión con la contraseña recién restablecida', async () => {
-    const user = userEvent.setup();
-    renderAuth();
-    await user.type(screen.getByLabelText(/^Correo/i), 'demo@test.com');
-    await user.type(screen.getByLabelText(/^Contrase/i), 'ClaveNueva123');
-    await user.click(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
-    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
-  });
+  // C01-10 completo se verifica en passwordRecovery.test.tsx mediante las pantallas reales.
 
   it('C01-11: logout 204 limpia sesión, chat y caché, conserva presupuestos y navega a login', async () => {
     const user = userEvent.setup();
@@ -249,11 +243,11 @@ describe('CU01 — autenticación', () => {
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
   });
 
-  it('C01-11: también limpia la sesión local si falla logout en la API', async () => {
+  it.each(['HTTP 500', 'red'])('C01-11: también limpia la sesión local si falla logout por %s', async (failure) => {
     const user = userEvent.setup();
     localStorage.setItem('access_token', 'token-activo');
     localStorage.setItem('khipubot_chat_messages', '[]');
-    server.use(http.post('*/api/v1/auth/logout', () => contractError(500, 'INTERNAL_ERROR', 'Error interno.')));
+    server.use(http.post('*/api/v1/auth/logout', () => failure === 'red' ? HttpResponse.error() : contractError(500, 'INTERNAL_ERROR', 'Error interno.')));
     renderAuth('/ajustes');
     await user.click(screen.getByRole('button', { name: /Cerrar sesi.n/i }));
     expect(await screen.findByRole('heading', { name: /Inicia sesi/ })).toBeInTheDocument();
@@ -283,5 +277,89 @@ describe('CU01 — autenticación', () => {
     expect(localStorage.getItem('mock_budgets_v2')).toBe('[{"preserve":true}]');
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login');
+  });
+
+  it.each([
+    [403, 'ACCOUNT_INACTIVE', 'Tu cuenta está inactiva. Contacta a soporte para recibir ayuda.'],
+    [429, 'TOO_MANY_REQUESTS', 'Demasiadas solicitudes. Intenta en 30 s.'],
+    [503, 'AUTH_SERVICE_UNAVAILABLE', 'El servicio de autenticación no está disponible.'],
+  ])('C01-14: maneja HTTP %i sin crear sesión y conserva el correo', async (status, code, message) => {
+    const user = userEvent.setup();
+    server.use(http.post('*/api/v1/auth/login', () => contractError(status, code, message)));
+    renderAuth();
+    await user.type(screen.getByLabelText(/^Correo/i), 'persona@example.test');
+    await user.type(screen.getByLabelText(/^Contrase/i), 'Clave1234');
+    await user.click(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(screen.getByLabelText(/^Correo/i)).toHaveValue('persona@example.test');
+    expect(screen.getByLabelText(/^Contrase/i)).toHaveValue('');
+    expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login');
+    expect(screen.getByRole('button', { name: /Ingresar a mis finanzas/i })).toBeEnabled();
+  });
+
+  it('C01-15: un fallo de red no guarda un token y permite volver a intentar', async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    server.use(http.post('*/api/v1/auth/login', () => {
+      attempts += 1;
+      return attempts === 1 ? HttpResponse.error() : HttpResponse.json({ access_token: 'token-reintento' });
+    }));
+    renderAuth();
+    await user.type(screen.getByLabelText(/^Correo/i), 'persona@example.test');
+    await user.type(screen.getByLabelText(/^Contrase/i), 'Clave1234');
+    await user.click(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
+    expect(await screen.findByRole('alert')).not.toBeEmptyDOMElement();
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/login');
+
+    await user.type(screen.getByLabelText(/^Contrase/i), 'Clave1234');
+    await user.click(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+    expect(attempts).toBe(2);
+    expect(localStorage.getItem('access_token')).toBe('token-reintento');
+  });
+
+  it('C01-16: deshabilita el envío mientras el login está pendiente', async () => {
+    const user = userEvent.setup();
+    const pending = deferred();
+    let calls = 0;
+    server.use(http.post('*/api/v1/auth/login', async () => {
+      calls += 1;
+      await pending.promise;
+      return HttpResponse.json({ access_token: 'token-unico' });
+    }));
+    renderAuth();
+    await user.type(screen.getByLabelText(/^Correo/i), 'persona@example.test');
+    await user.type(screen.getByLabelText(/^Contrase/i), 'Clave1234');
+    try {
+      await user.dblClick(screen.getByRole('button', { name: /Ingresar a mis finanzas/i }));
+      await waitFor(() => expect(calls).toBe(1));
+      expect(screen.getByRole('button', { name: 'Ingresando…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Ingresando…' })).toHaveAttribute('aria-busy', 'true');
+      expect(localStorage.getItem('access_token')).toBeNull();
+    } finally {
+      pending.resolve();
+    }
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument();
+    expect(calls).toBe(1);
+  });
+
+  it('C01-17: mostrar u ocultar la contraseña no envía el formulario', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    server.use(http.post('*/api/v1/auth/login', () => { calls += 1; return HttpResponse.json({}); }));
+    renderAuth();
+    await user.type(screen.getByLabelText(/^Contrase/i), 'Clave1234');
+    const password = screen.getByLabelText(/^Contrase/i);
+    expect(password).toHaveAttribute('type', 'password');
+    await user.click(screen.getByRole('button', { name: 'Mostrar contraseña' }));
+    expect(password).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: 'Ocultar contraseña' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'Ocultar contraseña' }));
+    expect(password).toHaveAttribute('type', 'password');
+    expect(password).toHaveValue('Clave1234');
+    expect(calls).toBe(0);
   });
 });

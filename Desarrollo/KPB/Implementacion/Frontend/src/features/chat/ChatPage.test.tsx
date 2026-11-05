@@ -18,7 +18,7 @@ function renderChat() {
 }
 async function send(text: string) {
   const user = userEvent.setup(); renderChat();
-  await user.type(screen.getByRole('textbox', { name: /gastos o ingresos/i }), text);
+  fireEvent.change(screen.getByRole('textbox', { name: /gastos o ingresos/i }), { target: { value: text } });
   await user.click(screen.getByRole('button', { name: 'Enviar' }));
   return user;
 }
@@ -36,10 +36,14 @@ describe('CU02 — texto libre', () => {
     server.use(http.post('*/api/v1/extractions/text', () => { extractions++; return HttpResponse.json({ preview_id: 'preview-1', extracted: { type: 'EXPENSE', amount: '15.00', currency: 'PEN', concept: 'almuerzo', transaction_date: new Date().toISOString().slice(0, 10), category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE' } }, confidence: .99, requires_confirmation: true }); }),
       http.post('*/api/v1/transactions', () => { posts++; return HttpResponse.json({}); }));
     const budgetsBefore = localStorage.getItem('mock_budgets_v2');
+    const walletsBefore = await apiGet('/wallets').then((response) => response.json());
+    const transactionsBefore = await apiGet('/transactions').then((response) => response.json());
     await send('gasté 15 soles en almuerzo');
     expect(await screen.findByText('Revisa tu transacción')).toBeInTheDocument();
     expect(extractions).toBe(1); expect(posts).toBe(0);
     expect(localStorage.getItem('mock_budgets_v2')).toBe(budgetsBefore);
+    expect(await apiGet('/wallets').then((response) => response.json())).toEqual(walletsBefore);
+    expect(await apiGet('/transactions').then((response) => response.json())).toEqual(transactionsBefore);
   });
 
   it('C02-02: acepta una vez con monto string y categoría, y la tarjeta guardada solo ofrece historial', async () => {
@@ -109,18 +113,18 @@ describe('CU02 — texto libre', () => {
     const user = await send('gasté 15 soles en almuerzo'); await user.click(await screen.findByRole('button', { name: 'Editar' }));
     const dialog = screen.getByRole('dialog'); const amount = within(dialog).getByLabelText(/^Monto/i); const concept = within(dialog).getByLabelText(/^Concepto/i);
     await user.clear(amount); await user.click(within(dialog).getByRole('button', { name: 'Guardar cambios' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ingresa un monto válido con hasta dos decimales.');
     await user.type(amount, 'abc'); await user.click(within(dialog).getByRole('button', { name: 'Guardar cambios' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ingresa un monto válido con hasta dos decimales.');
     await user.clear(amount); await user.type(amount, '15'); await user.clear(concept); await user.click(within(dialog).getByRole('button', { name: 'Guardar cambios' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ingresa un concepto.');
   });
 
   it('C02-08b: rechaza monto cero en el modal', async () => {
     const user = await send('gasté 15 soles en almuerzo'); await user.click(await screen.findByRole('button', { name: 'Editar' }));
     const dialog = screen.getByRole('dialog'); const amount = within(dialog).getByLabelText(/^Monto/i);
     await user.clear(amount); await user.type(amount, '0'); await user.click(within(dialog).getByRole('button', { name: 'Guardar cambios' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ingresa un monto válido con hasta dos decimales.');
   });
 
   it('C02-09: categoría editada se envía como manual con su category_id', async () => {
@@ -140,7 +144,7 @@ describe('CU02 — texto libre', () => {
     server.use(http.post('*/api/v1/extractions/text', () => HttpResponse.json({ preview_id: `p-${amount}`, extracted: { type: 'EXPENSE', amount, currency: 'PEN', concept: 'gasto de prueba', transaction_date: new Date().toISOString().slice(0, 10), category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE' } }, confidence: .99, requires_confirmation: true })),
       http.get('*/api/v1/categories', () => HttpResponse.json([{ id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'expense' }, { id: 'category-transport', name: 'Transporte', type: 'expense' }, { id: 'category-health', name: 'Salud', type: 'expense' }])),
       http.get('*/api/v1/wallets', () => HttpResponse.json([{ id: '4d6b3036-4290-4bde-aea4-375c779ef48b', name: 'BCP', currency: 'PEN', is_default: true }])));
-    await user.type(screen.getByRole('textbox', { name: /gastos o ingresos/i }), 'gasto de prueba'); await user.click(screen.getByRole('button', { name: 'Enviar' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /gastos o ingresos/i }), { target: { value: 'gasto de prueba' } }); await user.click(screen.getByRole('button', { name: 'Enviar' }));
     await screen.findByRole('button', { name: 'Aceptar' });
     if (category !== 'Alimentación') { await user.click(screen.getByRole('button', { name: 'Editar' })); await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: category })); await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Guardar cambios' })); }
   }
@@ -168,8 +172,17 @@ describe('CU02 — texto libre', () => {
 
   it('C02-14: categoría Salud sin tope devuelve budget_alert null', async () => {
     const user = userEvent.setup(); renderChat(); await previewWithAmount(user, '15.00', 'Salud');
-    let alert: unknown = 'unset'; server.use(http.post('*/api/v1/transactions', async ({ request }) => { await request.json(); alert = null; return HttpResponse.json({ transaction: { id: 'health', type: 'expense', amount: '15.00', currency: 'PEN', concept: 'gasto de prueba', category: { id: 'category-health', name: 'Salud', source: 'manual' }, wallet: { id: '4d6b3036-4290-4bde-aea4-375c779ef48b', name: 'BCP' }, occurred_at: new Date().toISOString(), source: 'text' }, budget_alert: null }); }));
-    await user.click(screen.getByRole('button', { name: 'Aceptar' })); await waitFor(() => expect(alert).toBeNull()); expect(screen.queryByText('Alerta de presupuesto')).not.toBeInTheDocument();
+    const save = vi.fn();
+    server.use(http.post('*/api/v1/transactions', async ({ request }) => {
+      save(await request.json());
+      return HttpResponse.json({ transaction: { id: 'health', type: 'expense', amount: '15.00', currency: 'PEN', concept: 'gasto de prueba', category: { id: 'category-health', name: 'Salud', source: 'manual' }, wallet: { id: '4d6b3036-4290-4bde-aea4-375c779ef48b', name: 'BCP' }, occurred_at: new Date().toISOString(), source: 'text' }, budget_alert: null });
+    }));
+    await user.click(screen.getByRole('button', { name: 'Aceptar' }));
+    expect(await screen.findByRole('heading', { name: 'Transacción registrada' })).toBeInTheDocument();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ category_id: 'category-health', amount: '15.00' });
+    expect(screen.queryByText('Alerta de presupuesto')).not.toBeInTheDocument();
+    expect(screen.queryByText('¡Presupuesto excedido!')).not.toBeInTheDocument();
   });
 
   it('C02-15: presupuesto e historial reflejan consumo y porcentaje coherentes', async () => {
