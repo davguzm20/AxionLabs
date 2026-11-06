@@ -1,7 +1,8 @@
-"""Controlador FastAPI (Router) para el módulo de Transacciones (CU02).
+"""Controlador FastAPI (Router) para el módulo de Transacciones (CU02 y CU04).
 
 Rutas expuestas:
-- POST /api/v1/transactions/text: Registra una transacción procesando texto libre con IA.
+- POST /api/v1/transactions/text: Registra una transacción procesando texto libre con IA (CU02).
+- POST /api/v1/transactions/receipt: Escanea comprobante y genera vista previa temporal (CU04 - Paso 1).
 - PATCH /api/v1/transactions/{transaction_id}: Corrige concepto o categoría de una transacción.
 - GET /api/v1/transactions/{transaction_id}: Consulta una transacción específica.
 """
@@ -11,16 +12,18 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Response, status
+from fastapi import APIRouter, Depends, File, Form, Header, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.database import get_db
 from app.integrations.redis.notifications import NotificationBus, get_notification_bus
+from app.integrations.redis.previews import ReceiptPreviewStore, get_preview_store
 from app.modules.auth.deps import CurrentSession, get_current_session
 from app.modules.transactions import repository, service
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    ReceiptPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
@@ -42,7 +45,12 @@ router = APIRouter(
 # Inyección de dependencias tipadas
 DbSession = Annotated[Session, Depends(get_db)]
 Current = Annotated[CurrentSession, Depends(get_current_session)]
+PreviewStore = Annotated[ReceiptPreviewStore, Depends(get_preview_store)]
 
+
+# =============================================================================
+# Endpoints CU02: Transacción por Texto Libre
+# =============================================================================
 
 @router.post(
     "/text",
@@ -69,6 +77,51 @@ def create_transaction_from_text(
         bus=bus,
     )
 
+
+# =============================================================================
+# Endpoints CU04: Transacción por Foto / OCR (Paso 1: Vista Previa)
+# =============================================================================
+
+@router.post(
+    "/receipt",
+    response_model=ReceiptPreviewResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Escanear comprobante con visión OCR (CU04 - Paso 1: Vista Previa)",
+)
+async def scan_receipt_for_preview(
+    db: DbSession,
+    current: Current,
+    preview_store: PreviewStore,
+    image: UploadFile = File(
+        ...,
+        description="Foto de la boleta o factura en formato JPG o PNG (máx. 8 MB).",
+    ),
+    wallet_id: uuid.UUID | None = Form(
+        None,
+        description="ID del monedero al que se asociará la vista previa (opcional).",
+    ),
+) -> ReceiptPreviewResponse:
+    """CU04 - Paso 1: Sube una foto de un comprobante de pago.
+
+    Procesa la imagen en memoria volátil (nunca la guarda en disco), ejecuta visión OCR,
+    asigna categoría tentativa y guarda un preview temporal de 10 minutos con preview_id
+    para revisión previa del usuario.
+    """
+    file_bytes = await image.read()
+    return service.create_receipt_preview(
+        db=db,
+        user=current.user,
+        file_bytes=file_bytes,
+        filename=image.filename,
+        content_type=image.content_type,
+        wallet_id=wallet_id,
+        preview_store=preview_store,
+    )
+
+
+# =============================================================================
+# Endpoints de consulta y corrección
+# =============================================================================
 
 @router.patch(
     "/{transaction_id}",
@@ -130,4 +183,3 @@ def get_transaction(
         needs_review=False,
         created_at=created_str,
     )
-
