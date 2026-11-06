@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.database import get_db
+from app.integrations.redis.notifications import NotificationBus, get_notification_bus
 from app.modules.auth.deps import CurrentSession, get_current_session
 from app.modules.transactions import repository, service
 from app.modules.transactions.schemas import (
@@ -53,6 +54,7 @@ def create_transaction_from_text(
     data: TextTransactionRequest,
     db: DbSession,
     current: Current,
+    bus: Annotated[NotificationBus, Depends(get_notification_bus)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> TextTransactionResponse:
     """CU02: El usuario escribe una frase (ej: 'Gasté 15 soles en almuerzo'),
@@ -64,6 +66,7 @@ def create_transaction_from_text(
         db=db,
         user=current.user,
         data=data,
+        bus=bus,
     )
 
 
