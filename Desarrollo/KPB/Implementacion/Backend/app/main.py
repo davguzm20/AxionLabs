@@ -2,7 +2,9 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
 from app.core.errors import register_error_handlers
+from app.modules.alerts.router import router as thresholds_router
 from app.modules.auth.router import router as auth_router
+from app.modules.notifications.router import router as notifications_router
 from app.modules.transactions.router import router as transactions_router
 
 app = FastAPI(
@@ -17,6 +19,8 @@ register_error_handlers(app)
 # Registro de módulos funcionales (CU)
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(transactions_router, prefix="/api/v1")
+app.include_router(thresholds_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
 
 
 @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)

@@ -18,6 +18,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -169,6 +170,21 @@ class BudgetStatus(str, enum.Enum):
 class AlertType(str, enum.Enum):
     UMBRAL = "UMBRAL"
     SOBREGIRO = "SOBREGIRO"
+
+
+class AlertPriority(str, enum.Enum):
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+
+
+class NotificationType(str, enum.Enum):
+    BUDGET_ALERT = "BUDGET_ALERT"
+    SYSTEM = "SYSTEM"
+
+
+class NotificationStatus(str, enum.Enum):
+    UNREAD = "UNREAD"
+    READ = "READ"
 
 
 class AccessStatus(str, enum.Enum):
@@ -718,12 +734,53 @@ class Budget(Base):
 
 
 # ---------------------------------------------------------------------------
+# budget_thresholds
+# ---------------------------------------------------------------------------
+class BudgetThreshold(Base):
+    __tablename__ = "budget_thresholds"
+    __table_args__ = (
+        CheckConstraint(
+            "percentage BETWEEN 1 AND 100", name="chk_budget_thresholds_percentage"
+        ),
+        Index(
+            "uq_budget_thresholds_active",
+            "budget_id",
+            "percentage",
+            unique=True,
+            postgresql_where=text("is_active = TRUE"),
+        ),
+        Index("idx_budget_thresholds_budget", "budget_id", "is_active"),
+    )
+
+    threshold_id: Mapped[uuid.UUID] = _uuid_pk()
+    budget_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("budgets.budget_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    percentage: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("TRUE")
+    )
+    created_at: Mapped[datetime] = _created_at()
+
+    def __repr__(self) -> str:
+        return f"<BudgetThreshold {self.percentage}%>"
+
+
+# ---------------------------------------------------------------------------
 # alerts
 # ---------------------------------------------------------------------------
 class Alert(Base):
     __tablename__ = "alerts"
     __table_args__ = (
         CheckConstraint("detected_percentage >= 0", name="chk_alerts_detected"),
+        UniqueConstraint(
+            "budget_id",
+            "threshold_id",
+            "period_start",
+            name="uq_alerts_budget_threshold_period",
+        ),
         Index("idx_alerts_user_unread", "user_id", "is_read"),
         Index("idx_alerts_budget_id", "budget_id"),
     )
@@ -743,6 +800,21 @@ class Alert(Base):
     message: Mapped[str] = mapped_column(String(255), nullable=False)
     detected_percentage: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     remaining_balance: Mapped[Decimal | None] = mapped_column(Money)
+    # Campos del CU08. Son nulos solo en las alertas anteriores a la migracion.
+    threshold_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("budget_thresholds.threshold_id", ondelete="SET NULL"),
+    )
+    period_start: Mapped[date | None] = mapped_column(Date)
+    threshold_percentage: Mapped[int | None] = mapped_column(SmallInteger)
+    consumed: Mapped[Decimal | None] = mapped_column(Money)
+    limit_amount: Mapped[Decimal | None] = mapped_column(Money)
+    priority: Mapped[AlertPriority] = mapped_column(
+        _pg_enum(AlertPriority, "alert_priority"),
+        nullable=False,
+        default=AlertPriority.NORMAL,
+        server_default=text("'NORMAL'"),
+    )
     is_read: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("FALSE")
     )
@@ -763,10 +835,6 @@ class Alert(Base):
     def type(self, value: AlertType) -> None:
         self.alert_type = value
 
-    @property
-    def priority(self) -> str:
-        return "high" if self.alert_type == AlertType.SOBREGIRO else "normal"
-
     def mark_as_read(self) -> None:
         self.is_read = True
 
@@ -781,7 +849,7 @@ class Alert(Base):
             "id": str(self.alert_id),
             "type": "budget_alert",
             "alert_type": self.alert_type.value,
-            "priority": self.priority,
+            "priority": self.priority.value,
             "category": category_dict,
             "usage_percentage": (
                 float(self.detected_percentage)
@@ -802,6 +870,56 @@ class Alert(Base):
 
     def __repr__(self) -> str:
         return f"<Alert {self.alert_type.value if self.alert_type else ''} {self.detected_percentage}%>"
+
+
+# ---------------------------------------------------------------------------
+# notifications
+# ---------------------------------------------------------------------------
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index(
+            "idx_notifications_user_status_created",
+            "user_id",
+            "status",
+            text("created_at DESC"),
+        ),
+        Index(
+            "uq_notifications_alert",
+            "alert_id",
+            unique=True,
+            postgresql_where=text("alert_id IS NOT NULL"),
+        ),
+    )
+
+    notification_id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    alert_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("alerts.alert_id", ondelete="SET NULL")
+    )
+    type: Mapped[NotificationType] = mapped_column(
+        _pg_enum(NotificationType, "notification_type"),
+        nullable=False,
+        default=NotificationType.BUDGET_ALERT,
+        server_default=text("'BUDGET_ALERT'"),
+    )
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[NotificationStatus] = mapped_column(
+        _pg_enum(NotificationStatus, "notification_status"),
+        nullable=False,
+        default=NotificationStatus.UNREAD,
+        server_default=text("'UNREAD'"),
+    )
+    created_at: Mapped[datetime] = _created_at()
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return f"<Notification {self.status.value if self.status else ''}>"
 
 
 # ---------------------------------------------------------------------------
@@ -848,12 +966,17 @@ __all__ = [
     "PeriodType",
     "BudgetStatus",
     "AlertType",
+    "AlertPriority",
+    "NotificationType",
+    "NotificationStatus",
     "AccessStatus",
     "User",
     "Category",
     "Wallet",
     "Transaction",
     "Budget",
+    "BudgetThreshold",
     "Alert",
+    "Notification",
     "AccessLog",
 ]
