@@ -17,7 +17,7 @@ export function AppShell() {
           <Outlet />
         </main>
         {!isFormRoute && <BottomNav />}
-        {pathname !== '/ajustes' && (
+        {pathname !== '/ajustes' && pathname !== '/presupuestos' && (
           <div className="fixed right-4 top-2 z-30 rounded-xl bg-white/95 shadow-sm backdrop-blur">
             <NotificationBell />
           </div>

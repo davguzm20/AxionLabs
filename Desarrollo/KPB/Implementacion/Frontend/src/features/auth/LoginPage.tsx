@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
-import { api } from '../../lib/api';
+import { login } from './authService';
 import type { ApiError } from '../../lib/errors';
 
 const loginSchema = z.object({
@@ -11,12 +11,11 @@ const loginSchema = z.object({
   password: z.string().min(1, 'Ingresa tu contraseña.'),
 });
 type LoginValues = z.infer<typeof loginSchema>;
-type AuthResponse = { access_token: string; token_type: string; expires_in: number };
 type LoginError = ApiError & { status?: number };
 
 function getLoginMessage(error: LoginError): string {
   switch (error.status) {
-    case 401: return 'Correo o contraseña incorrectos. Inténtalo de nuevo.';
+    case 401: return 'Correo o contraseña incorrectos. Inténtelo de nuevo.';
     case 423: return 'Tu cuenta se bloqueó por 30 minutos. Te enviamos un correo.';
     case 403: return 'Tu cuenta está inactiva. Contacta a soporte para recibir ayuda.';
     case 429: return 'Demasiadas solicitudes. Intenta en 30 s.';
@@ -27,6 +26,7 @@ function getLoginMessage(error: LoginError): string {
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const sessionExpired = (location.state as { sessionExpired?: boolean } | null)?.sessionExpired;
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -39,10 +39,7 @@ export function LoginPage() {
     setSubmitError(undefined);
     setLoading(true);
     try {
-      const response = await api<AuthResponse>('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(values),
-      });
+      const response = await login(values.email, values.password);
       localStorage.setItem('access_token', response.access_token);
       const destination = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
       navigate(destination || '/inicio', { replace: true });
@@ -96,6 +93,7 @@ export function LoginPage() {
               {errors.password && <p id="password-error" className="mt-1 text-small text-danger">{errors.password.message}</p>}
             </div>
             {submitError && <p role="alert" className="rounded-md border border-danger px-3 py-2 text-small text-danger">{submitError}</p>}
+            {sessionExpired && <p role="alert" className="rounded-md border border-danger px-3 py-2 text-small text-danger">Tu sesión expiró. Inicia sesión nuevamente.</p>}
             <button
               type="submit" disabled={loading} aria-busy={loading}
               className="min-h-[52px] w-full rounded-md bg-brand-600 px-4 font-semibold text-white hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-wait disabled:opacity-70"

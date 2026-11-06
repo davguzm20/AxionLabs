@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
-import { api } from '../../lib/api';
 import type { ApiError } from '../../lib/errors';
+import { requestPasswordRecovery } from './authService';
 
 const forgotSchema = z.object({
   email: z.string().trim().email('Ingresa un correo electrónico válido.'),
@@ -24,11 +24,8 @@ export function ForgotPasswordPage() {
     setLoading(true);
     setErrorMessage(undefined);
     try {
-      await api<{ message: string }>('/auth/forgot-password', {
-        method: 'POST',
-        body: JSON.stringify(values),
-      });
-      navigate('/reset-password', { state: { email: values.email } });
+      const response = await requestPasswordRecovery(values.email);
+      navigate('/reset-password', { state: { recovery_id: response.recovery_id, email: values.email } });
     } catch (error) {
       // The contract specifies a generic success response to avoid email enumeration.
       // Keep the same next step if the request cannot be completed temporarily.

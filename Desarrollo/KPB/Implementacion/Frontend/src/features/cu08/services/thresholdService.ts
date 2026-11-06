@@ -1,6 +1,5 @@
 import type { AlertThreshold } from '../types/alert.types';
-
-const API = '/api/v1';
+import { apiRaw } from '../../../lib/api';
 
 interface ThresholdResponse {
   category_id: string;
@@ -10,7 +9,7 @@ interface ThresholdResponse {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await apiRaw(url, init);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: string }; message?: string } | null;
     throw new Error(body?.error?.message ?? body?.message ?? 'No se pudo guardar la configuración de alertas.');
@@ -29,7 +28,7 @@ function toAlertThreshold(result: ThresholdResponse): AlertThreshold {
 
 export async function getThresholds(categoryId: string, signal?: AbortSignal): Promise<AlertThreshold> {
   const result = await request<ThresholdResponse>(
-    `${API}/budgets/${encodeURIComponent(categoryId)}/alert-thresholds`,
+    `/budgets/${encodeURIComponent(categoryId)}/alert-thresholds`,
     { signal },
   );
   return toAlertThreshold(result);
@@ -40,7 +39,7 @@ export async function putThresholds(
   payload: Pick<AlertThreshold, 'thresholds' | 'channels'>,
 ): Promise<AlertThreshold> {
   const result = await request<ThresholdResponse>(
-    `${API}/budgets/${encodeURIComponent(categoryId)}/alert-thresholds`,
+    `/budgets/${encodeURIComponent(categoryId)}/alert-thresholds`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

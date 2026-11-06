@@ -1,6 +1,5 @@
 import type { Notification, NotificationPage } from '../types/alert.types';
-
-const API = '/api/v1';
+import { apiRaw } from '../../../lib/api';
 
 interface NotificationDto {
   id: string;
@@ -40,10 +39,7 @@ function fromDto(dto: NotificationDto): Notification {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  const token = window.localStorage.getItem('access_token');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(url, { ...init, headers });
+  const response = await apiRaw(url, init);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: string }; message?: string } | null;
     throw new Error(body?.error?.message ?? body?.message ?? 'No se pudieron cargar las notificaciones.');
@@ -59,10 +55,10 @@ export async function getNotifications(options: {
 }, signal?: AbortSignal): Promise<NotificationPage> {
   const params = new URLSearchParams({ type: 'budget_alert', page: String(options.page ?? 1), page_size: String(options.pageSize ?? 10) });
   if (options.unread !== undefined) params.set('unread', String(options.unread));
-  const result = await request<NotificationPageDto>(`${API}/notifications?${params}`, { signal });
+  const result = await request<NotificationPageDto>(`/notifications?${params}`, { signal });
   return { ...result, data: result.data.map(fromDto) };
 }
 
 export function markNotificationRead(notificationId: string): Promise<void> {
-  return request<void>(`${API}/notifications/${encodeURIComponent(notificationId)}/read`, { method: 'PATCH' });
+  return request<void>(`/notifications/${encodeURIComponent(notificationId)}/read`, { method: 'PATCH' });
 }
