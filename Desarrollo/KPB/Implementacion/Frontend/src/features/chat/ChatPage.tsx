@@ -4,7 +4,7 @@ import { RotateCcw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChatBubble } from './components/ChatBubble';
 import type { BotMood } from './components/ChatBubble';
-import { AlertCard, type ChatAlert } from './components/AlertCard';
+import { AlertCard, type BudgetAlert } from './components/AlertCard';
 import { ChatInput } from './components/ChatInput';
 import { ConfirmationCard, type Transaction, type TransactionStatus } from './components/ConfirmationCard';
 import { TransactionPreviewCard } from './components/TransactionPreviewCard';
@@ -12,126 +12,68 @@ import { VoiceRecorder } from './voice/VoiceRecorder';
 import { confirmVoicePreview, createVoicePreview } from './voice/voiceService';
 import { confirmReceiptPreview, createReceiptPreview } from './receipt/receiptService';
 import { validateReceiptImage } from './receipt/imageValidation';
-import type { Api10SavedTransaction, Api10SavedTransactionResponse, LegacyBudgetAlert, SavedTransactionResponse, TransactionDraft, TransactionPreview } from './transactionPreview.types';
+import type { TransactionDraft, TransactionPreview } from './transactionPreview.types';
 import { NotificationBell } from '../notifications/components/NotificationBell';
 
 type ChatMessage =
   | { id: string; kind: 'bubble'; author: 'bot' | 'user'; text: string; botMood?: BotMood }
   | { id: string; kind: 'confirmation'; transaction: Transaction; walletName: string; idempotencyKey: string; idempotencyPayload?: string; status: TransactionStatus; isSaving?: boolean; saveError?: string }
-  | { id: string; kind: 'preview'; source: 'TEXT' | 'VOICE' | 'RECEIPT'; preview: TransactionPreview; suggestedCategoryId?: string; imageFile?: File; isSaving?: boolean; saveError?: string }
-  | { id: string; kind: 'alert'; alert: ChatAlert };
-type SaveResponse = Api10SavedTransactionResponse | SavedTransactionResponse;
+  | { id: string; kind: 'preview'; source: 'VOICE' | 'RECEIPT'; preview: TransactionPreview; imageFile?: File; isSaving?: boolean; saveError?: string }
+  | { id: string; kind: 'alert'; alert: BudgetAlert };
+type ExtractionResponse = { transaction: Transaction; wallet_name?: string };
+type SaveResponse = { transaction: Transaction; alerts?: BudgetAlert[]; wallet_name?: string };
 type ApiError = Error & { status?: number; code?: string };
-
-function highestPriorityAlert(alerts: ChatAlert[]): ChatAlert | undefined {
-  return alerts.reduce<ChatAlert | undefined>((highest, alert) => {
-    if (!highest) return alert;
-    const priority = (value: ChatAlert) => value.priority?.toLocaleLowerCase() === 'high' ? 2 : value.threshold_percentage ?? 0;
-    return priority(alert) > priority(highest) ? alert : highest;
-  }, undefined);
-}
-
-function toChatTransaction(transaction: Api10SavedTransaction | SavedTransactionResponse['transaction']): Transaction {
-  if ('wallet' in transaction) {
-    return {
-      id: transaction.id,
-      type: transaction.type.toUpperCase() as Transaction['type'],
-      amount: transaction.amount,
-      currency: transaction.currency,
-      concept: transaction.concept,
-      transaction_date: transaction.occurred_at.slice(0, 10),
-      wallet_id: transaction.wallet.id,
-      category: { ...transaction.category, icon: 'circle-help' },
-    };
-  }
-  return { ...transaction, category: { ...transaction.category, icon: transaction.category.icon ?? 'circle-help' } };
-}
 
 export function ChatPage() {
   const queryClient = useQueryClient();
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    if (typeof localStorage !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('khipubot_chat_messages');
-        if (saved) {
-          const parsed = JSON.parse(saved) as ChatMessage[];
-          if (Array.isArray(parsed)) {
-            return parsed.map((message) => message.kind === 'preview'
-              ? { ...message, imageFile: undefined, isSaving: false }
-              : message.kind === 'confirmation' ? { ...message, isSaving: false } : message);
-          }
-        }
-      } catch {
-        // Ignore invalid or unavailable browser storage.
-      }
-    }
-    return [
+  const [messages, setMessages] = useState<ChatMessage[]>([
     { id: 'greeting', kind: 'bubble', author: 'bot', text: '¡Hola! Soy KhipuBot. ¿Qué gastos o ingresos tuviste hoy? Puedes escribirme, enviarme un audio o la foto de un comprobante.' },
-  ];
-  });
+  ]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [voiceRecorderOpen, setVoiceRecorderOpen] = useState(false);
   const [retryText, setRetryText] = useState<string>();
-  const [textValidationError, setTextValidationError] = useState<string>();
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const previewIdempotencyKeys = useRef(new Map<string, string>());
-  const savingPreviewIds = useRef(new Set<string>());
 
   useEffect(() => {
-    if (typeof localStorage === 'undefined') return;
-    if (messages.length === 0) return;
-    try {
-      const persistentMessages = messages.map((message) => message.kind === 'preview'
-        ? { ...message, imageFile: undefined, isSaving: false }
-        : message.kind === 'confirmation' ? { ...message, isSaving: false } : message);
-      localStorage.setItem('khipubot_chat_messages', JSON.stringify(persistentMessages));
-    } catch {
-      // Keep the chat usable when browser storage is unavailable.
-    }
-  }, [messages]);
-
-  useEffect(() => {
-    if (sending || voiceRecorderOpen) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(frame);
-  }, [sending, messages.length, voiceRecorderOpen]);
+    if (!sending) requestAnimationFrame(() => inputRef.current?.focus());
+  }, [sending]);
 
   async function sendText(text: string) {
     const value = text.trim();
     if (!value || sending) return;
-    if (value.length > 500) {
-      setTextValidationError('El texto no puede superar 500 caracteres.');
-      return;
-    }
-    setTextValidationError(undefined);
 
     setMessages((current) => [...current.slice(-48), { id: crypto.randomUUID(), kind: 'bubble', author: 'user', text: value }]);
     setSending(true);
-    setRetryText(undefined);
+    setRetryText(value);
     try {
-      const preview = await api<TransactionPreview>('/extractions/text', {
+      const response = await api<ExtractionResponse>('/extractions/text', {
         method: 'POST',
         body: JSON.stringify({ text: value, client_timezone: 'America/Lima' }),
       });
-      setMessages((current) => [...current.slice(-48), { id: preview.preview_id, kind: 'preview', source: 'TEXT', preview, suggestedCategoryId: preview.extracted.category.id }]);
+      setMessages((current) => [...current.slice(-48), {
+        id: response.transaction.id,
+        kind: 'confirmation',
+        transaction: response.transaction,
+        walletName: response.wallet_name ?? 'BCP',
+        idempotencyKey: crypto.randomUUID(),
+        status: 'extracted',
+      }]);
+      setDraft('');
+      setRetryText(undefined);
     } catch (error) {
       const apiError = error as ApiError;
-      const isMissingAmount = apiError.code === 'AMOUNT_NOT_DETECTED';
-      const message = isMissingAmount
-        ? 'No pude identificar el monto. \u00bfCu\u00e1nto fue el gasto/ingreso?'
-        : apiError.code === 'NLP_UNAVAILABLE'
-          ? apiError.message || 'El servicio no est\u00e1 disponible. Por favor intente nuevamente'
-          : apiError.message || 'No pude registrar la transacci\u00f3n. Int\u00e9ntalo nuevamente.';
+      const message = apiError.code === 'AMOUNT_NOT_FOUND'
+        ? 'No pude identificar el monto. ¿Cuánto fue el gasto/ingreso?'
+        : 'No pude extraer los datos. Inténtalo nuevamente.';
       setMessages((current) => [...current.slice(-49), {
         id: crypto.randomUUID(),
         kind: 'bubble',
         author: 'bot',
         text: message,
-        botMood: 'sad',
+        botMood: apiError.code === 'AMOUNT_NOT_FOUND' ? 'surprised' : 'sad',
       }]);
-      if (apiError.code === 'NLP_UNAVAILABLE') setRetryText(value);
     } finally {
       setSending(false);
       requestAnimationFrame(() => {
@@ -151,19 +93,18 @@ export function ChatPage() {
       ? { ...message, idempotencyKey, idempotencyPayload, isSaving: true, saveError: undefined }
       : message));
     try {
-      const response = await api<Api10SavedTransactionResponse>('/transactions', {
+      const response = await api<SaveResponse>('/transactions', {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
-          type: transaction.type.toLowerCase(),
+          preview_id: messageId,
+          type: transaction.type,
           amount: transaction.amount,
           currency: transaction.currency,
           concept: transaction.concept,
-          occurred_at: `${transaction.transaction_date}T12:00:00-05:00`,
+          transaction_date: transaction.transaction_date,
           wallet_id: transaction.wallet_id,
           category_id: transaction.category.id,
-          category_source: transaction.category.source === 'suggested' ? 'suggested' : 'manual',
-          source: 'manual',
         }),
       });
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
@@ -171,15 +112,14 @@ export function ChatPage() {
       setMessages((current) => {
         const confirmationIndex = current.findIndex((message) => message.kind === 'confirmation' && message.id === messageId);
         const next = current.map((message) => message.kind === 'confirmation' && message.id === messageId
-          ? { ...message, transaction: toChatTransaction(response.transaction), status: 'confirmed' as const, isSaving: false, saveError: undefined }
+          ? { ...message, transaction: response.transaction, status: 'confirmed' as const, isSaving: false, saveError: undefined }
           : message);
-        const alert = response.budget_alert;
-        if (alert && confirmationIndex >= 0) {
-          next.splice(confirmationIndex + 1, 0, {
+        if (response.alerts?.length && confirmationIndex >= 0) {
+          next.splice(confirmationIndex + 1, 0, ...response.alerts.map((alert) => ({
             id: crypto.randomUUID(),
-            kind: 'alert',
+            kind: 'alert' as const,
             alert,
-          });
+          })));
         }
         return next;
       });
@@ -247,65 +187,43 @@ export function ChatPage() {
     }
   }
 
-  async function confirmPreview(messageId: string, source: 'TEXT' | 'VOICE' | 'RECEIPT', transactionDraft: TransactionDraft) {
-    if (savingPreviewIds.current.has(messageId)) return;
-    savingPreviewIds.current.add(messageId);
+  async function confirmPreview(messageId: string, source: 'VOICE' | 'RECEIPT', transactionDraft: TransactionDraft) {
     setMessages((current) => current.map((message) => message.kind === 'preview' && message.id === messageId
       ? { ...message, isSaving: true, saveError: undefined }
       : message));
     try {
       const preview = messages.find((message) => message.kind === 'preview' && message.id === messageId);
       if (!preview || preview.kind !== 'preview') return;
-      const idempotencyKey = previewIdempotencyKeys.current.get(messageId) ?? crypto.randomUUID();
-      previewIdempotencyKeys.current.set(messageId, idempotencyKey);
-      console.log('[Chat] Enviando una transacción al backend.');
-      const response: SaveResponse = source === 'TEXT'
-        ? await api<Api10SavedTransactionResponse>('/transactions', {
-          method: 'POST',
-          headers: { 'Idempotency-Key': idempotencyKey },
-          body: JSON.stringify({
-            type: transactionDraft.type.toLocaleLowerCase(),
-            amount: transactionDraft.amount,
-            currency: transactionDraft.currency,
-            concept: transactionDraft.concept,
-            occurred_at: `${transactionDraft.transaction_date}T12:00:00-05:00`,
-            wallet_id: transactionDraft.wallet_id,
-            category_id: transactionDraft.category_id,
-            source: 'text',
-            category_source: transactionDraft.category_id === preview.suggestedCategoryId ? 'suggested' : 'manual',
-          }),
-        })
-        : source === 'VOICE'
-          ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft)
-          : await confirmReceiptPreview(preview.preview.preview_id, transactionDraft, preview.preview.ocr_text);
-      const savedTransaction = toChatTransaction(response.transaction);
+      const response = source === 'VOICE'
+        ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft)
+        : await confirmReceiptPreview(preview.preview.preview_id, transactionDraft, preview.preview.ocr_text);
+      const savedTransaction: Transaction = {
+        ...response.transaction,
+        category: {
+          ...response.transaction.category,
+          icon: response.transaction.category.icon ?? 'circle-help',
+        },
+      };
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      void queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      void queryClient.invalidateQueries({ queryKey: ['wallets'] });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      previewIdempotencyKeys.current.delete(messageId);
       setMessages((current) => {
         const next = current.map((message) => message.kind === 'preview' && message.id === messageId
           ? {
             id: message.id,
             kind: 'confirmation' as const,
             transaction: savedTransaction,
-            walletName: 'wallet_name' in response ? response.wallet_name ?? 'Monedero' : 'wallet' in response.transaction ? response.transaction.wallet.name : 'Monedero',
+            walletName: response.wallet_name ?? 'Monedero',
             idempotencyKey: crypto.randomUUID(),
             status: 'confirmed' as const,
           }
           : message);
-        const legacyAlerts: LegacyBudgetAlert[] = 'alerts' in response ? response.alerts ?? [] : [];
-        const budgetAlert = 'budget_alert' in response ? response.budget_alert : undefined;
-        const alert = highestPriorityAlert([...legacyAlerts, ...(budgetAlert ? [budgetAlert] : [])]);
-        if (alert) {
+        if (response.alerts?.length) {
           const index = next.findIndex((message) => message.id === messageId);
-          next.splice(index + 1, 0, {
+          next.splice(index + 1, 0, ...response.alerts.map((alert) => ({
             id: crypto.randomUUID(),
-            kind: 'alert',
+            kind: 'alert' as const,
             alert,
-          });
+          })));
         }
         return next;
       });
@@ -314,9 +232,20 @@ export function ChatPage() {
       setMessages((current) => current.map((message) => message.kind === 'preview' && message.id === messageId
         ? { ...message, isSaving: false, saveError: messageText }
         : message));
-    } finally {
-      savingPreviewIds.current.delete(messageId);
     }
+  }
+
+  function cancelPreview(messageId: string) {
+    setMessages((current) => {
+      const selected = current.find((message) => message.kind === 'preview' && message.id === messageId);
+      if (!selected || selected.kind !== 'preview') return current;
+      if (selected.source === 'VOICE' && selected.preview.transcript) {
+        return current.map((message) => message.id === messageId
+          ? { id: messageId, kind: 'bubble' as const, author: 'user' as const, text: selected.preview.transcript ?? '' }
+          : message);
+      }
+      return current.filter((message) => message.id !== messageId);
+    });
   }
 
   return (
@@ -352,10 +281,8 @@ export function ChatPage() {
                 imageFile={message.imageFile}
                 isSaving={message.isSaving ?? false}
                 saveError={message.saveError}
-                onEdit={(updatedDraft, category) => setMessages((current) => current.map((item) => item.kind === 'preview' && item.id === message.id
-                  ? { ...item, preview: { ...item.preview, extracted: { ...item.preview.extracted, amount: updatedDraft.amount, concept: updatedDraft.concept, category } } }
-                  : item))}
                 onConfirm={(transactionDraft) => void confirmPreview(message.id, message.source, transactionDraft)}
+                onCancel={() => cancelPreview(message.id)}
               />
               : <AlertCard key={message.id} alert={message.alert} />)}
         {sending && <div className="flex items-center gap-2 text-sm text-ink-500" role="status"><img src="/logo.png" alt="" className="h-8 w-8 rounded-full" />KhipuBot está preparando la transacción…</div>}
@@ -375,10 +302,9 @@ export function ChatPage() {
       </div>
 
       <div className="shrink-0 border-t border-ink-300 bg-white p-4">
-        {textValidationError && <p role="alert" className="mb-2 text-sm text-danger-600">{textValidationError}</p>}
         <ChatInput
           value={draft}
-          onChange={(value) => { setDraft(value); if (value.length > 0 && value.length <= 500) setTextValidationError(undefined); }}
+          onChange={setDraft}
           onSend={sendText}
           onVoice={() => setVoiceRecorderOpen(true)}
           onReceiptFile={sendReceipt}

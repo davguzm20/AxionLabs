@@ -1,4 +1,4 @@
-import { apiRaw } from '../../../lib/api';
+import { buildApiUrl, createApiHeaders } from '../../../lib/api';
 import type { NotificationStreamEvent } from '../types/notification.types';
 
 export type NotificationStreamStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -13,7 +13,7 @@ export function parseNotificationFrames(buffer: string): { events: NotificationS
     for (const line of frame.split(/\r?\n/u)) {
       if (line.startsWith('event:')) {
         const value = line.slice(6).trim();
-        if (value === 'budget_alert') event = value;
+        if (value === 'alert.created' || value === 'notification.read') event = value;
       } else if (line.startsWith('data:')) {
         data.push(line.slice(5).trimStart());
       }
@@ -50,9 +50,9 @@ export async function consumeNotificationStream(
   while (!signal.aborted) {
     onStatus(attempt === 0 ? 'connecting' : 'reconnecting');
     try {
-      const response = await apiRaw('/notifications/stream', {
+      const response = await fetch(buildApiUrl('/notifications/stream'), {
         method: 'GET',
-        headers: { Accept: 'text/event-stream' },
+        headers: createApiHeaders({ Accept: 'text/event-stream' }),
         cache: 'no-store',
         signal,
       });

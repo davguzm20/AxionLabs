@@ -1,19 +1,26 @@
 import { useId } from 'react';
 import { AlertTriangle, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { BudgetAlert, LegacyBudgetAlert } from '../transactionPreview.types';
 
-export type { BudgetAlert } from '../transactionPreview.types';
-export type ChatAlert = BudgetAlert | LegacyBudgetAlert;
+export type BudgetAlert = {
+  id?: string;
+  title?: string;
+  message?: string;
+  body?: string;
+  severity?: string;
+  priority?: 'high' | 'normal' | 'HIGH' | 'NORMAL';
+  threshold_percentage?: number;
+  usage_percentage?: number;
+};
 
-type AlertCardProps = { alert: ChatAlert };
+type AlertCardProps = { alert: BudgetAlert };
 
 export function AlertCard({ alert }: AlertCardProps) {
   const titleId = useId();
-  const message = alert.message;
+  const message = alert.message ?? alert.body ?? 'Se alcanzó un umbral de tu presupuesto.';
   const isDanger = alert.priority
     ? alert.priority.toLocaleLowerCase() === 'high'
-    : ('severity' in alert && alert.severity === 'danger') || /excediste|superaste|excedido/i.test(message);
+    : alert.severity === 'danger' || /excediste|superaste|excedido/i.test(message);
   const colorClass = isDanger
     ? 'border-red-500 bg-white text-red-600'
     : 'border-warning-500 bg-white text-warning-600';
@@ -31,7 +38,7 @@ export function AlertCard({ alert }: AlertCardProps) {
             ? <XCircle aria-hidden="true" className="mt-0.5 h-6 w-6 shrink-0" />
             : <AlertTriangle aria-hidden="true" className="mt-0.5 h-6 w-6 shrink-0" />}
           <div>
-            <h2 id={titleId} className="font-semibold">{isDanger ? '¡Presupuesto excedido!' : 'Alerta de presupuesto'}</h2>
+            <h2 id={titleId} className="font-semibold">{alert.title ?? (isDanger ? 'Presupuesto superado' : 'Alerta de presupuesto')}</h2>
             <p className="mt-1 text-sm leading-5 text-ink-900">{message}</p>
           </div>
         </div>

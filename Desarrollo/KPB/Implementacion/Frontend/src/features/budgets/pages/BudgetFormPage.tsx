@@ -1,17 +1,12 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ChevronDown, Plus, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { ArrowLeft, Bell, ChevronDown, Plus, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { ApiError } from '../../../lib/errors';
-import { putThresholds } from '../../cu08/services/thresholdService';
-import { useNotificationPreferences } from '../../notifications/hooks/useNotificationPreferences';
 import { useBudgetDetails, useBudgets } from '../hooks/useBudgets';
-import { updateBudget } from '../services/budgetService';
-import { normalizeMoney, parseMoneyToCents } from '../utils/money';
+import { calculatePercentage, formatMoney, normalizeMoney, parseMoneyToCents } from '../utils/money';
 import type { BudgetCreatePayload, BudgetPeriodType, BudgetUpdatePayload, Currency } from '../types/budget.types';
 
 const presetThresholds = [75, 80, 90, 100];
@@ -63,13 +58,16 @@ const defaultValues: FormValues = {
   thresholds: [80],
 };
 
+function centsToDecimal(cents: bigint): string {
+  const absolute = cents < 0n ? -cents : cents;
+  return `${cents < 0n ? '-' : ''}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, '0')}`;
+}
+
 export function BudgetFormPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { budgetId } = useParams();
   const isEditing = Boolean(budgetId);
   const budgetQuery = useBudgetDetails(budgetId);
-  const { preferences, isLoading: isPreferencesLoading } = useNotificationPreferences();
   const {
     categories,
     isCategoriesLoading,
@@ -78,7 +76,6 @@ export function BudgetFormPage() {
     isSaving,
   } = useBudgets('ACTIVE');
   const [submitError, setSubmitError] = useState<string>();
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [customThreshold, setCustomThreshold] = useState('');
   const budget = budgetQuery.data;
 
@@ -109,7 +106,17 @@ export function BudgetFormPage() {
   }, [budget, reset]);
 
   const values = watch();
+  const selectedCategory = categories.find((category) => category.id === values.category_id) ?? budget?.category;
   const budgetCategoryIsListed = budget ? categories.some((category) => category.id === budget.category.id) : true;
+  const normalizedAmount = normalizeMoney(values.amount) ?? '0.00';
+  const previewConsumed = budget?.consumed ?? '0.00';
+  const previewPercentage = useMemo(
+    () => calculatePercentage(previewConsumed, normalizedAmount),
+    [normalizedAmount, previewConsumed],
+  );
+  const amountCents = parseMoneyToCents(normalizedAmount) ?? 0n;
+  const consumedCents = parseMoneyToCents(previewConsumed) ?? 0n;
+  const previewRemaining = centsToDecimal(amountCents - consumedCents);
   const isLoading = isCategoriesLoading || (isEditing && budgetQuery.isPending);
   const loadError = categoriesError ?? budgetQuery.error;
 
@@ -163,20 +170,7 @@ export function BudgetFormPage() {
     };
 
     try {
-      setIsSubmitting(true);
-      if (budgetId && budget) {
-        await updateBudget(budgetId, updatePayload);
-        await putThresholds(budget.category.id, {
-          thresholds: formValues.thresholds,
-          channels: preferences?.email_notifications ? ['app', 'email'] : ['app'],
-        });
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['budgets'] }),
-          queryClient.invalidateQueries({ queryKey: ['budget', budgetId] }),
-        ]);
-      } else {
-        await save({ budgetId, createPayload, updatePayload, thresholds: formValues.thresholds });
-      }
+      await save({ budgetId, createPayload, updatePayload, thresholds: formValues.thresholds });
       navigate('/presupuestos', { replace: true });
     } catch (cause) {
       if (cause instanceof ApiError && cause.details) {
@@ -187,8 +181,6 @@ export function BudgetFormPage() {
         }
       }
       setSubmitError(cause instanceof Error ? cause.message : 'No se pudo guardar el presupuesto. Intenta nuevamente.');
-    } finally {
-      setIsSubmitting(false);
     }
   }
 
@@ -198,53 +190,59 @@ export function BudgetFormPage() {
   }
 
   if (isLoading) {
-    return createPortal(
-      <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:p-6">
-        <main className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-bg p-4 shadow-xl sm:p-6">
-        <div className="animate-pulse space-y-4 py-2" role="status" aria-label="Cargando formulario">
+    return (
+      <main className="h-full overflow-y-auto bg-bg px-4 pb-8 sm:px-6">
+        <div className="mx-auto max-w-2xl animate-pulse space-y-4 py-6" role="status" aria-label="Cargando formulario">
           <div className="h-12 rounded-lg bg-ink-300/50" />
           <div className="h-12 rounded-lg bg-ink-300/50" />
           <div className="h-12 rounded-lg bg-ink-300/50" />
         </div>
-        </main>
-      </div>, document.body,
+      </main>
     );
   }
 
   if (loadError || (isEditing && !budget)) {
-    return createPortal(
-      <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:p-6">
-        <section role="alert" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-danger bg-white p-5 shadow-xl">
+    return (
+      <main className="h-full overflow-y-auto bg-bg px-4 pb-8 sm:px-6">
+        <section role="alert" className="mx-auto mt-6 max-w-2xl rounded-xl border border-danger bg-white p-5">
           <p className="text-sm text-danger-600">{loadError instanceof Error ? loadError.message : 'No encontramos este presupuesto.'}</p>
           <button type="button" onClick={() => navigate('/presupuestos')} className="mt-4 min-h-11 rounded-md px-3 text-sm font-medium text-accent-600 underline">Volver a presupuestos</button>
         </section>
-      </div>, document.body,
+      </main>
     );
   }
 
   return (
-    createPortal(<div className="fixed inset-0 z-[100] flex items-end justify-center overflow-y-auto bg-black/50 backdrop-blur-sm sm:items-center sm:p-6">
-    <main role="dialog" aria-modal="true" aria-labelledby="budget-form-title" className="flex max-h-[90vh] min-h-0 w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl sm:rounded-xl">
-      <header className="shrink-0 bg-white px-5 pt-6 sm:px-8">
-        <h1 id="budget-form-title" className="text-xl font-bold text-gray-900">{isEditing ? 'Editar presupuesto' : 'Nuevo presupuesto'}</h1>
-        <p className="mt-1 text-sm text-gray-500">Define el límite para esta categoría.</p>
+    <main className="flex h-full min-h-0 flex-col bg-bg">
+      <header className="sticky top-0 z-10 flex h-[4.5rem] shrink-0 items-center gap-3 border-b border-ink-300 bg-white px-4 sm:px-6">
+        <button type="button" onClick={leaveForm} aria-label="Volver a presupuestos" className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-ink-900 hover:bg-bg">
+          <ArrowLeft aria-hidden="true" size={22} />
+        </button>
+        <h1 className="font-semibold text-ink-900">{isEditing ? 'Editar presupuesto' : 'Nuevo presupuesto'}</h1>
       </header>
 
       <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-5 sm:px-8">
-          <div className="mx-auto max-w-2xl space-y-6">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-5 sm:px-6">
+          <div className="mx-auto max-w-2xl space-y-4">
             {submitError && <p role="alert" className="rounded-lg border border-danger bg-white p-3 text-sm text-danger-600">{submitError}</p>}
 
             <div>
               <label htmlFor="budget-category" className="mb-1.5 block text-sm font-medium text-ink-900">Categoría</label>
-              <div className="relative mb-4 w-full">
+              <div className="relative">
                 {isEditing && <input type="hidden" {...register('category_id')} />}
-                <select id="budget-category" disabled={isEditing} aria-invalid={Boolean(errors.category_id)} aria-describedby={errors.category_id ? 'budget-category-error' : undefined} {...(!isEditing ? register('category_id') : { value: budget?.category.id ?? '' })} className={`w-full appearance-none rounded-xl border border-gray-300 bg-white px-4 py-3 pr-11 text-base outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200 ${values.category_id ? 'text-gray-900' : 'text-gray-500'}`}>
-                  <option value="">{'Selecciona una categoría'}</option>
+                <select
+                  id="budget-category"
+                  disabled={isEditing}
+                  aria-invalid={Boolean(errors.category_id)}
+                  aria-describedby={errors.category_id ? 'budget-category-error' : undefined}
+                  {...(!isEditing ? register('category_id') : { value: budget?.category.id ?? '' })}
+                  className="min-h-11 w-full appearance-none rounded-md border border-ink-300 bg-white px-3 pr-10 text-sm text-ink-900 disabled:bg-bg"
+                >
+                  <option value="">Selecciona una categoría</option>
                   {isEditing && budget && !budgetCategoryIsListed && <option value={budget.category.id}>{budget.category.name}</option>}
                   {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                 </select>
-                <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-500" size={18} />
               </div>
               {errors.category_id && <p id="budget-category-error" role="alert" className="mt-1 text-xs text-danger-600">{errors.category_id.message}</p>}
             </div>
@@ -269,29 +267,9 @@ export function BudgetFormPage() {
                 {...register('amount')}
                 className="min-h-11 w-full rounded-md border border-ink-300 bg-white px-3 text-sm text-ink-900"
               />
-              <p id="budget-amount-help" className="mt-2 text-xs text-ink-500">El máximo que quieres gastar aquí cada periodo. No es dinero guardado ni se descuenta de tus cuentas.</p>
+              <p id="budget-amount-help" className="mt-1 text-xs text-ink-500">El máximo que quieres gastar aquí cada periodo. No es dinero guardado ni se descuenta de tus cuentas.</p>
               {errors.amount && <p id="budget-amount-error" role="alert" className="mt-1 text-xs text-danger-600">{errors.amount.message}</p>}
             </div>
-
-            <fieldset>
-              <legend className="mb-1.5 text-sm font-medium text-ink-900">Porcentajes de alerta</legend>
-              <p className="mb-2 text-xs text-ink-500">Te avisamos al llegar a uno de estos porcentajes del tope.</p>
-              <div className="flex flex-wrap gap-2">
-                {presetThresholds.map((threshold) => {
-                  const selected = values.thresholds.includes(threshold);
-                  return <button key={threshold} type="button" aria-pressed={selected} onClick={() => toggleThreshold(threshold)} className={`min-h-11 min-w-14 rounded-md border px-3 text-sm font-medium ${selected ? 'border-accent-600 bg-accent-100 text-accent-600' : 'border-ink-300 bg-white text-ink-700'}`}>{threshold}%</button>;
-                })}
-              </div>
-              <div className="mt-2 flex w-full items-center gap-2 overflow-hidden">
-                <label className="sr-only" htmlFor="custom-threshold">Otro porcentaje</label>
-                <input id="custom-threshold" type="number" min={1} max={100} value={customThreshold} onChange={(event) => setCustomThreshold(event.target.value)} placeholder="Otro porcentaje" className="h-12 flex-1 min-w-0 rounded-md border border-ink-300 bg-white px-3 text-sm" />
-                <button type="button" onClick={addCustomThreshold} aria-label="Agregar porcentaje" className="flex shrink-0 w-12 h-12 items-center justify-center rounded-md border border-ink-300 bg-white text-accent-600 hover:bg-accent-100"><Plus aria-hidden="true" size={20} /></button>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2" aria-label="Porcentajes agregados">
-                {values.thresholds.filter((threshold) => !presetThresholds.includes(threshold)).map((threshold) => <button key={threshold} type="button" onClick={() => toggleThreshold(threshold)} className="inline-flex min-h-9 items-center gap-1 rounded-full bg-accent-100 px-3 text-xs font-medium text-accent-600">{threshold}% <X aria-hidden="true" size={14} /><span className="sr-only">Quitar {threshold}%</span></button>)}
-              </div>
-              {errors.thresholds && <p role="alert" className="mt-1 text-xs text-danger-600">{errors.thresholds.message}</p>}
-            </fieldset>
 
             <div>
               <label htmlFor="budget-period" className="mb-1.5 block text-sm font-medium text-ink-900">Periodo</label>
@@ -317,19 +295,75 @@ export function BudgetFormPage() {
               </div>
             )}
 
+            <fieldset>
+              <legend className="mb-1.5 text-sm font-medium text-ink-900">Porcentaje de alerta</legend>
+              <p className="mb-2 text-xs text-ink-500">Te avisamos al llegar a uno de estos porcentajes del tope.</p>
+              <div className="flex flex-wrap gap-2">
+                {presetThresholds.map((threshold) => {
+                  const selected = values.thresholds.includes(threshold);
+                  return (
+                    <button
+                      key={threshold}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => toggleThreshold(threshold)}
+                      className={`min-h-11 min-w-14 rounded-md border px-3 text-sm font-medium ${selected ? 'border-accent-600 bg-accent-100 text-accent-600' : 'border-ink-300 bg-white text-ink-700'}`}
+                    >
+                      {threshold}%
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <label className="sr-only" htmlFor="custom-threshold">Otro porcentaje</label>
+                <input id="custom-threshold" type="number" min={1} max={100} value={customThreshold} onChange={(event) => setCustomThreshold(event.target.value)} placeholder="Otro porcentaje" className="min-h-11 min-w-0 flex-1 rounded-md border border-ink-300 bg-white px-3 text-sm" />
+                <button type="button" onClick={addCustomThreshold} aria-label="Agregar porcentaje" className="flex min-h-11 min-w-11 items-center justify-center rounded-md border border-ink-300 bg-white text-accent-600 hover:bg-accent-100">
+                  <Plus aria-hidden="true" size={20} />
+                </button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2" aria-label="Porcentajes agregados">
+                {values.thresholds.filter((threshold) => !presetThresholds.includes(threshold)).map((threshold) => (
+                  <button key={threshold} type="button" onClick={() => toggleThreshold(threshold)} className="inline-flex min-h-9 items-center gap-1 rounded-full bg-accent-100 px-3 text-xs font-medium text-accent-600">
+                    {threshold}% <X aria-hidden="true" size={14} />
+                    <span className="sr-only">Quitar {threshold}%</span>
+                  </button>
+                ))}
+              </div>
+              {errors.thresholds && <p role="alert" className="mt-1 text-xs text-danger-600">{errors.thresholds.message}</p>}
+            </fieldset>
+
+            <section aria-labelledby="budget-preview-heading" className="space-y-2">
+              <h2 id="budget-preview-heading" className="text-sm font-semibold text-ink-900">Así se verá</h2>
+              <article className="rounded-xl bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="truncate font-medium text-ink-900">{selectedCategory?.name || 'Categoría'}</p>
+                  <span className="text-xs text-ink-500">{previewPercentage.toFixed(1)}%</span>
+                </div>
+                <p className="mt-2 text-sm text-ink-700">Te quedan {formatMoney(previewRemaining, values.currency)}</p>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-ink-300/50" aria-hidden="true">
+                  <div className={`h-full rounded-full ${previewPercentage >= 100 ? 'bg-danger-600' : previewPercentage >= 80 ? 'bg-warning-500' : 'bg-brand-500'}`} style={{ width: `${Math.min(previewPercentage, 100)}%` }} />
+                </div>
+                <div className="mt-2 flex justify-between gap-2 text-xs text-ink-500">
+                  <span>Gastado: {formatMoney(previewConsumed, values.currency)}</span>
+                  <span>Tope: {formatMoney(normalizedAmount, values.currency)}</span>
+                </div>
+              </article>
+              <p className="flex items-center gap-2 text-xs text-ink-500"><Bell aria-hidden="true" size={15} /> Te avisamos cuando llegues a los porcentajes seleccionados.</p>
+              {values.period_type === 'MONTHLY' && <p className="text-xs text-ink-500">Se reinicia el día 1 de cada mes.</p>}
+              {values.period_type === 'WEEKLY' && <p className="text-xs text-ink-500">Se reinicia cada lunes.</p>}
+            </section>
           </div>
         </div>
 
-        <footer className="shrink-0 bg-white px-5 pb-10 pt-4 sm:px-8">
-          <div className="mx-auto mt-6 flex max-w-2xl gap-4">
-            <button type="button" onClick={leaveForm} disabled={isSubmitting || isSaving} className="flex-1 rounded-xl border border-gray-300 bg-white py-3 font-medium text-gray-700 disabled:opacity-50">Cancelar</button>
-            <button type="submit" disabled={isSubmitting || isSaving || (isEditing && isPreferencesLoading)} aria-busy={isSubmitting || isSaving} className="flex-1 rounded-xl bg-teal-600 py-3 font-medium text-white hover:bg-teal-700 disabled:cursor-wait disabled:opacity-60">
-              {isSubmitting || isSaving ? 'Guardando…' : isEditing ? 'Guardar cambios' : 'Crear presupuesto'}
+        <footer className="sticky bottom-0 z-10 shrink-0 border-t border-ink-300 bg-white px-4 py-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:px-6">
+          <div className="mx-auto flex max-w-2xl gap-3">
+            <button type="button" onClick={leaveForm} disabled={isSaving} className="min-h-11 flex-1 rounded-md border border-danger-600 bg-white px-3 text-sm font-semibold text-danger-600 disabled:opacity-50">Cancelar</button>
+            <button type="submit" disabled={isSaving} aria-busy={isSaving} className="min-h-11 flex-1 rounded-md bg-accent-600 px-3 text-sm font-semibold text-white hover:bg-accent-500 disabled:cursor-wait disabled:opacity-60">
+              {isSaving ? 'Guardando…' : isEditing ? 'Guardar cambios' : 'Crear presupuesto'}
             </button>
           </div>
         </footer>
       </form>
     </main>
-    </div>, document.body)
   );
 }

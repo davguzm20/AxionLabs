@@ -11,37 +11,15 @@ export interface UserNotification {
   read_at: string | null;
 }
 
-export interface ApiNotification {
-  id: string;
-  type: 'budget_alert';
-  priority: 'normal' | 'high';
-  category: { id: string; name: string };
-  threshold_percentage: number;
-  usage_percentage: number;
-  spent_month: string;
-  monthly_limit: string;
-  remaining: string;
-  message: string;
-  read: boolean;
-  created_at: string;
-}
-
-export interface ContractNotificationListResponse {
+export interface NotificationListResponse {
   data: UserNotification[];
-  pagination: {
+  meta: {
     page: number;
     page_size: number;
-    total_items: number;
-    total_pages: number;
+    total: number;
+    pages: number;
   };
 }
-
-export interface LegacyNotificationListResponse {
-  data: UserNotification[];
-  meta: { page: number; page_size: number; total: number; pages: number };
-}
-
-export type NotificationListResponse = ContractNotificationListResponse | LegacyNotificationListResponse;
 
 export interface UserPreferences {
   main_currency: 'PEN' | 'USD';
@@ -49,6 +27,6 @@ export interface UserPreferences {
 }
 
 export interface NotificationStreamEvent {
-  event: 'budget_alert';
+  event: 'alert.created' | 'notification.read';
   data: Record<string, unknown>;
 }

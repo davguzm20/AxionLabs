@@ -53,7 +53,6 @@ class AISettings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
-    openai_vision_model: str = "gpt-4o-mini"
 
 
 @lru_cache
