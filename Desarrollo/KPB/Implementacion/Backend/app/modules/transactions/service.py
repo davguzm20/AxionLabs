@@ -40,6 +40,7 @@ from app.modules.transactions.image_validation import validate_and_prepare_image
 from app.modules.transactions.schemas import (
     CategoryInfo,
     ExtractedReceiptData,
+    ReceiptConfirmRequest,
     ReceiptPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
@@ -400,4 +401,159 @@ def create_receipt_preview(
         extracted=extracted_out,
         confidence=extracted.confidence,
         requires_confirmation=True,
+    )
+
+
+# =============================================================================
+# CU04: Registro de Transacción por Foto / OCR (Paso 2: Confirmación y Guardado)
+# =============================================================================
+
+def confirm_receipt(
+    db: Session,
+    user: User,
+    data: ReceiptConfirmRequest,
+    preview_store: ReceiptPreviewStore,
+    bus: NotificationBus | None = None,
+) -> TextTransactionResponse:
+    """CU04 - Paso 2: Confirma y persiste una transacción a partir de un comprobante previo.
+
+    1. Valida que el preview_id exista y pertenezca al usuario (no vencido, 10 min).
+    2. Valida monto, monedero, moneda y fecha.
+    3. Persiste en PostgreSQL con source_type = SourceType.OCR y source_input = ocr_text.
+    4. Actualiza saldo del monedero atómicamente.
+    5. Evalúa alertas de presupuesto.
+    6. Elimina el preview temporal.
+    """
+    # 1. Recuperar datos temporales del preview
+    preview_data = preview_store.get(data.preview_id, user.user_id)
+    if preview_data is None:
+        raise AppError(
+            409,
+            "PREVIEW_EXPIRED",
+            "La vista previa del comprobante ha expirado o no existe. Por favor, sube la foto nuevamente.",
+        )
+
+    # 2. Validar monto
+    try:
+        amount = Decimal(str(data.amount).replace(",", "."))
+        if amount <= Decimal("0.00"):
+            raise ValueError()
+    except Exception:
+        raise AppError(
+            422,
+            "INVALID_AMOUNT",
+            "El monto confirmado debe ser un valor positivo válido.",
+        )
+
+    # 3. Obtener el monedero con bloqueo pesimista
+    wallet = repository.get_wallet(db, user.user_id, data.wallet_id, for_update=True)
+    if wallet is None:
+        raise AppError(
+            409,
+            "NO_ACTIVE_WALLET",
+            "El monedero seleccionado no existe o está inactivo.",
+        )
+
+    # 4. Validar coherencia de moneda
+    data_curr = data.currency.upper()
+    if (data_curr == "PEN" and wallet.currency != Currency.PEN) or (
+        data_curr == "USD" and wallet.currency != Currency.USD
+    ):
+        curr_name = "soles" if wallet.currency == Currency.PEN else "dólares"
+        other_name = "dólares" if wallet.currency == Currency.PEN else "soles"
+        raise AppError(
+            422,
+            "CURRENCY_MISMATCH",
+            f"El monedero es en {curr_name}. Elige un monedero en {other_name} o registra el monto en {curr_name}.",
+        )
+
+    # 5. Validar fecha
+    try:
+        tx_date = date.fromisoformat(data.transaction_date)
+    except ValueError:
+        raise AppError(422, "INVALID_DATE", "Formato de fecha no válido. Usa YYYY-MM-DD.")
+    _validate_transaction_date(tx_date)
+
+    # 6. Validar categoría
+    category = repository.get_category_by_id(db, user.user_id, data.category_id)
+    if category is None:
+        raise AppError(422, "INVALID_CATEGORY", "La categoría seleccionada no existe o no es válida.")
+
+    # 7. Determinar tipo y saldo
+    is_income = data.type.upper() == "INCOME"
+    tx_type = TransactionType.INGRESO if is_income else TransactionType.GASTO
+    balance_delta = amount if is_income else -amount
+
+    transacted_datetime = datetime(
+        tx_date.year, tx_date.month, tx_date.day, 12, 0, 0, tzinfo=LIMA_TZ
+    )
+
+    # 8. Crear transacción
+    ocr_text = preview_data.get("ocr_text")
+    transaction = Transaction(
+        user_id=user.user_id,
+        wallet_id=wallet.wallet_id,
+        category_id=category.category_id,
+        amount=amount,
+        type=tx_type,
+        currency=wallet.currency,
+        concept=data.concept.strip() or "Comprobante escaneado",
+        transacted_at=transacted_datetime,
+        status=TransactionStatus.CONFIRMADA,
+        source_input=ocr_text,
+        source_type=SourceType.OCR,
+    )
+
+    # 9. Guardar y actualizar saldo atómicamente
+    repository.save_transaction_and_update_balance(
+        db=db,
+        transaction=transaction,
+        wallet=wallet,
+        balance_delta=balance_delta,
+    )
+
+    # 10. Evaluar alertas si el bus está disponible
+    alerts: list[dict] = []
+    try:
+        from app.modules.alerts import service as alerts_service
+        alerts = alerts_service.evaluate_transaction(db, user.user_id, transaction)
+        if bus is not None:
+            alerts_service.publish_alerts(bus, user.user_id, alerts)
+    except Exception as exc:
+        logger.warning(f"Evaluación de alertas omitida o no configurada: {exc}")
+
+    # 11. Eliminar preview de Redis
+    preview_store.delete(data.preview_id)
+
+    # 12. Respuesta
+    symbol = _get_currency_symbol(wallet.currency)
+    formatted_amount = f"{transaction.amount:.2f}"
+    formatted_balance = f"{wallet.current_balance:.2f}"
+    merchant_info = f" ({data.merchant})" if data.merchant else ""
+    message = (
+        f"Registré {symbol} {formatted_amount} en {category.name}{merchant_info} a partir del comprobante."
+    )
+
+    return TextTransactionResponse(
+        transaction=TransactionOut(
+            id=transaction.transaction_id,
+            type="INCOME" if transaction.type == TransactionType.INGRESO else "EXPENSE",
+            amount=formatted_amount,
+            currency=wallet.currency.value,
+            concept=transaction.concept,
+            merchant=data.merchant,
+            transaction_date=tx_date.isoformat(),
+            wallet_id=wallet.wallet_id,
+            category=CategoryInfo(
+                id=category.category_id,
+                name=category.name,
+                icon="tag",
+            ),
+            source="RECEIPT",
+            needs_review=False,
+            created_at=transaction.created_at.isoformat() if transaction.created_at else transacted_datetime.isoformat(),
+        ),
+        wallet_balance=formatted_balance,
+        alerts=alerts,
+        message=message,
     )

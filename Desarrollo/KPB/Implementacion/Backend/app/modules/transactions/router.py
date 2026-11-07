@@ -23,6 +23,7 @@ from app.modules.auth.deps import CurrentSession, get_current_session
 from app.modules.transactions import repository, service
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    ReceiptConfirmRequest,
     ReceiptPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
@@ -116,6 +117,33 @@ async def scan_receipt_for_preview(
         content_type=image.content_type,
         wallet_id=wallet_id,
         preview_store=preview_store,
+    )
+
+
+@router.post(
+    "/receipt/confirm",
+    response_model=TextTransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Confirmar y registrar comprobante (CU04 - Paso 2: Confirmación)",
+)
+def confirm_receipt_transaction(
+    data: ReceiptConfirmRequest,
+    db: DbSession,
+    current: Current,
+    preview_store: PreviewStore,
+    bus: Annotated[NotificationBus | None, Depends(get_notification_bus)] = None,
+) -> TextTransactionResponse:
+    """CU04 - Paso 2: Confirma los datos extraídos de la boleta o factura revisados por el usuario.
+
+    Crea la transacción en PostgreSQL con source_type = 'OCR', actualiza atómicamente
+    el saldo del monedero y elimina la vista previa temporal de Redis.
+    """
+    return service.confirm_receipt(
+        db=db,
+        user=current.user,
+        data=data,
+        preview_store=preview_store,
+        bus=bus,
     )
 
 
