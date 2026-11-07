@@ -1,10 +1,11 @@
-"""KPB-RTT: Lógica de negocio del Caso de Uso CU02 (Registro de Transacción por Texto).
+"""KPB-RTT / KPB-RTF: Lógica de negocio para Registro de Transacciones por Texto (CU02) y Foto/OCR (CU04).
 
 Orquesta:
-1. Extracción con IA (OpenAI o Mock).
-2. Validaciones de negocio (monto existente, coherencia de moneda, fechas válidas).
-3. Clasificación de categoría con fallback a 'Otros' y needs_review.
-4. Actualización atómica de saldos de monedero y persistencia en PostgreSQL.
+1. Extracción con IA (Texto libre y Visión multimodal).
+2. Validaciones de negocio (monto existente, coherencia de moneda, fechas válidas, formato de imagen).
+3. Clasificación de categoría con fallback a 'Otros'.
+4. Manejo de vistas previas temporales en Redis (TTL 10 min) para comprobantes.
+5. Actualización atómica de saldos de monedero y persistencia en PostgreSQL.
 """
 
 from __future__ import annotations
@@ -32,9 +33,15 @@ from app.entities import (
 from app.integrations.ai.extractor import extract_transaction_from_text
 from app.integrations.redis.notifications import NotificationBus
 from app.modules.alerts import service as alerts_service
+from app.integrations.ai.vision import extract_receipt_from_image
+from app.integrations.redis.previews import ReceiptPreviewStore
 from app.modules.transactions import repository
+from app.modules.transactions.image_validation import validate_and_prepare_image
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    ExtractedReceiptData,
+    ReceiptConfirmRequest,
+    ReceiptPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
@@ -63,6 +70,10 @@ def _validate_transaction_date(tx_date: date) -> None:
             "La fecha no puede ser más de un día futura ni anterior a 5 años.",
         )
 
+
+# =============================================================================
+# CU02: Registro de Transacción por Texto Libre
+# =============================================================================
 
 def create_from_text(
     db: Session,
@@ -125,7 +136,6 @@ def create_from_text(
     _validate_transaction_date(tx_date)
 
     # 7. Asignar categoría (CU05)
-    # Busca por concepto o palabra clave; si la confianza es baja o no encuentra, usa 'Otros'
     category = None
     needs_review = False
 
@@ -227,22 +237,17 @@ def correct_transaction(
     transaction_id: uuid.UUID,
     data: TransactionCorrectionRequest,
 ) -> TransactionOut:
-    """Permite corregir concepto o categoría de una transacción existente (PATCH).
-
-    Regla BR-043/044: No altera montos ni saldos del monedero.
-    """
+    """Permite corregir concepto o categoría de una transacción existente (PATCH)."""
     transaction = repository.get_transaction_by_id(db, user.user_id, transaction_id)
     if transaction is None:
         raise AppError(404, "TRANSACTION_NOT_FOUND", "Transacción no encontrada.")
 
-    # 1. Si se solicita cambio de categoría, validar existencia
     if data.category_id is not None:
         category = repository.get_category_by_id(db, user.user_id, data.category_id)
         if category is None:
             raise AppError(422, "INVALID_CATEGORY", "La categoría seleccionada no existe.")
         transaction.category_id = category.category_id
 
-    # 2. Si se solicita cambio de concepto, actualizarlo
     if data.concept is not None:
         clean_concept = data.concept.strip()
         if clean_concept:
@@ -251,7 +256,6 @@ def correct_transaction(
     db.commit()
     db.refresh(transaction)
 
-    # Cargar datos de la categoría para responder
     current_category = repository.get_category_by_id(db, user.user_id, transaction.category_id)
     cat_name = current_category.name if current_category else "Otros"
 
@@ -277,3 +281,279 @@ def correct_transaction(
         created_at=created_str,
     )
 
+
+# =============================================================================
+# CU04: Registro de Transacción por Foto / OCR (Paso 1: Vista Previa)
+# =============================================================================
+
+def create_receipt_preview(
+    db: Session,
+    user: User,
+    file_bytes: bytes,
+    filename: str | None,
+    content_type: str | None,
+    wallet_id: uuid.UUID | None,
+    preview_store: ReceiptPreviewStore,
+) -> ReceiptPreviewResponse:
+    """Procesa una imagen en memoria, ejecuta visión OCR y genera un preview temporal (TTL 10 min).
+
+    Reglas de KPB-Specs:
+    - La foto nunca se guarda en disco ni en base de datos.
+    - Se procesa y optimiza en memoria volátil.
+    - Se almacena temporalmente en Redis (preview_id) para confirmación posterior.
+    """
+    # 1. Validar y optimizar imagen en memoria (dimensiones, formato, tamaño máx. 8 MB)
+    validated = validate_and_prepare_image(
+        file_bytes=file_bytes,
+        filename=filename,
+        declared_content_type=content_type,
+    )
+
+    # 2. Verificar que el usuario tenga un monedero activo
+    wallet = repository.get_wallet(db, user.user_id, wallet_id)
+    if wallet is None:
+        raise AppError(
+            409,
+            "NO_ACTIVE_WALLET",
+            "Crea o activa un monedero antes de escanear comprobantes.",
+        )
+
+    default_curr = "PEN" if wallet.currency == Currency.PEN else "USD"
+
+    # 3. Invocar IA de visión (OpenAI Vision o Mock)
+    extracted = extract_receipt_from_image(
+        image_bytes=validated.data,
+        mime_type=validated.mime_type,
+        default_currency=default_curr,
+    )
+
+    # Si la imagen es ilegible o no es un comprobante
+    if (
+        extracted.confidence < 0.30
+        and extracted.amount is None
+        and not extracted.merchant
+        and not extracted.ocr_text
+    ):
+        raise AppError(
+            422,
+            "IMAGE_UNCLEAR",
+            "La imagen no es suficientemente clara o no parece un comprobante. Toma otra foto con mejor iluminación.",
+        )
+
+    # 4. Clasificar categoría tentativa
+    category = None
+    search_term = extracted.merchant or extracted.concept or ""
+    if search_term:
+        category = repository.get_category_by_name(db, user.user_id, search_term)
+
+    if category is None:
+        category = repository.get_fallback_category(db)
+
+    # 5. Generar preview_id temporal
+    preview_id = uuid.uuid4()
+    formatted_amount = f"{extracted.amount:.2f}" if extracted.amount is not None else None
+    tx_date_str = (
+        extracted.transaction_date.isoformat()
+        if extracted.transaction_date
+        else datetime.now(LIMA_TZ).date().isoformat()
+    )
+
+    # 6. Estructura que se guarda en el almacén temporal (10 minutos)
+    preview_payload = {
+        "preview_id": str(preview_id),
+        "amount": formatted_amount,
+        "currency": extracted.currency or default_curr,
+        "merchant": extracted.merchant,
+        "ruc": extracted.ruc,
+        "transaction_date": tx_date_str,
+        "concept": extracted.concept or extracted.merchant or "Consumo de comprobante",
+        "category_id": str(category.category_id),
+        "category_name": category.name,
+        "wallet_id": str(wallet.wallet_id),
+        "ocr_text": extracted.ocr_text,
+        "confidence": extracted.confidence,
+    }
+
+    # Guardar en Redis/memoria sin la imagen
+    preview_store.save(preview_id, user.user_id, preview_payload, ttl_seconds=600)
+
+    # 7. Armar respuesta de vista previa
+    category_info = CategoryInfo(
+        id=category.category_id,
+        name=category.name,
+        icon="tag",
+    )
+
+    extracted_out = ExtractedReceiptData(
+        type="EXPENSE",
+        amount=formatted_amount,
+        currency=extracted.currency or default_curr,
+        concept=preview_payload["concept"],
+        merchant=extracted.merchant,
+        ruc=extracted.ruc,
+        transaction_date=tx_date_str,
+        category=category_info,
+    )
+
+    return ReceiptPreviewResponse(
+        preview_id=preview_id,
+        ocr_text=extracted.ocr_text,
+        extracted=extracted_out,
+        confidence=extracted.confidence,
+        requires_confirmation=True,
+    )
+
+
+# =============================================================================
+# CU04: Registro de Transacción por Foto / OCR (Paso 2: Confirmación y Guardado)
+# =============================================================================
+
+def confirm_receipt(
+    db: Session,
+    user: User,
+    data: ReceiptConfirmRequest,
+    preview_store: ReceiptPreviewStore,
+    bus: NotificationBus | None = None,
+) -> TextTransactionResponse:
+    """CU04 - Paso 2: Confirma y persiste una transacción a partir de un comprobante previo.
+
+    1. Valida que el preview_id exista y pertenezca al usuario (no vencido, 10 min).
+    2. Valida monto, monedero, moneda y fecha.
+    3. Persiste en PostgreSQL con source_type = SourceType.OCR y source_input = ocr_text.
+    4. Actualiza saldo del monedero atómicamente.
+    5. Evalúa alertas de presupuesto.
+    6. Elimina el preview temporal.
+    """
+    # 1. Recuperar datos temporales del preview
+    preview_data = preview_store.get(data.preview_id, user.user_id)
+    if preview_data is None:
+        raise AppError(
+            409,
+            "PREVIEW_EXPIRED",
+            "La vista previa del comprobante ha expirado o no existe. Por favor, sube la foto nuevamente.",
+        )
+
+    # 2. Validar monto
+    try:
+        amount = Decimal(str(data.amount).replace(",", "."))
+        if amount <= Decimal("0.00"):
+            raise ValueError()
+    except Exception:
+        raise AppError(
+            422,
+            "INVALID_AMOUNT",
+            "El monto confirmado debe ser un valor positivo válido.",
+        )
+
+    # 3. Obtener el monedero con bloqueo pesimista
+    wallet = repository.get_wallet(db, user.user_id, data.wallet_id, for_update=True)
+    if wallet is None:
+        raise AppError(
+            409,
+            "NO_ACTIVE_WALLET",
+            "El monedero seleccionado no existe o está inactivo.",
+        )
+
+    # 4. Validar coherencia de moneda
+    data_curr = data.currency.upper()
+    if (data_curr == "PEN" and wallet.currency != Currency.PEN) or (
+        data_curr == "USD" and wallet.currency != Currency.USD
+    ):
+        curr_name = "soles" if wallet.currency == Currency.PEN else "dólares"
+        other_name = "dólares" if wallet.currency == Currency.PEN else "soles"
+        raise AppError(
+            422,
+            "CURRENCY_MISMATCH",
+            f"El monedero es en {curr_name}. Elige un monedero en {other_name} o registra el monto en {curr_name}.",
+        )
+
+    # 5. Validar fecha
+    try:
+        tx_date = date.fromisoformat(data.transaction_date)
+    except ValueError:
+        raise AppError(422, "INVALID_DATE", "Formato de fecha no válido. Usa YYYY-MM-DD.")
+    _validate_transaction_date(tx_date)
+
+    # 6. Validar categoría
+    category = repository.get_category_by_id(db, user.user_id, data.category_id)
+    if category is None:
+        raise AppError(422, "INVALID_CATEGORY", "La categoría seleccionada no existe o no es válida.")
+
+    # 7. Determinar tipo y saldo
+    is_income = data.type.upper() == "INCOME"
+    tx_type = TransactionType.INGRESO if is_income else TransactionType.GASTO
+    balance_delta = amount if is_income else -amount
+
+    transacted_datetime = datetime(
+        tx_date.year, tx_date.month, tx_date.day, 12, 0, 0, tzinfo=LIMA_TZ
+    )
+
+    # 8. Crear transacción
+    ocr_text = preview_data.get("ocr_text")
+    transaction = Transaction(
+        user_id=user.user_id,
+        wallet_id=wallet.wallet_id,
+        category_id=category.category_id,
+        amount=amount,
+        type=tx_type,
+        currency=wallet.currency,
+        concept=data.concept.strip() or "Comprobante escaneado",
+        transacted_at=transacted_datetime,
+        status=TransactionStatus.CONFIRMADA,
+        source_input=ocr_text,
+        source_type=SourceType.OCR,
+    )
+
+    # 9. Guardar y actualizar saldo atómicamente
+    repository.save_transaction_and_update_balance(
+        db=db,
+        transaction=transaction,
+        wallet=wallet,
+        balance_delta=balance_delta,
+    )
+
+    # 10. Evaluar alertas si el bus está disponible
+    alerts: list[dict] = []
+    try:
+        from app.modules.alerts import service as alerts_service
+        alerts = alerts_service.evaluate_transaction(db, user.user_id, transaction)
+        if bus is not None:
+            alerts_service.publish_alerts(bus, user.user_id, alerts)
+    except Exception as exc:
+        logger.warning(f"Evaluación de alertas omitida o no configurada: {exc}")
+
+    # 11. Eliminar preview de Redis
+    preview_store.delete(data.preview_id)
+
+    # 12. Respuesta
+    symbol = _get_currency_symbol(wallet.currency)
+    formatted_amount = f"{transaction.amount:.2f}"
+    formatted_balance = f"{wallet.current_balance:.2f}"
+    merchant_info = f" ({data.merchant})" if data.merchant else ""
+    message = (
+        f"Registré {symbol} {formatted_amount} en {category.name}{merchant_info} a partir del comprobante."
+    )
+
+    return TextTransactionResponse(
+        transaction=TransactionOut(
+            id=transaction.transaction_id,
+            type="INCOME" if transaction.type == TransactionType.INGRESO else "EXPENSE",
+            amount=formatted_amount,
+            currency=wallet.currency.value,
+            concept=transaction.concept,
+            merchant=data.merchant,
+            transaction_date=tx_date.isoformat(),
+            wallet_id=wallet.wallet_id,
+            category=CategoryInfo(
+                id=category.category_id,
+                name=category.name,
+                icon="tag",
+            ),
+            source="RECEIPT",
+            needs_review=False,
+            created_at=transaction.created_at.isoformat() if transaction.created_at else transacted_datetime.isoformat(),
+        ),
+        wallet_balance=formatted_balance,
+        alerts=alerts,
+        message=message,
+    )
