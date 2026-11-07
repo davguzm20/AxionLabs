@@ -663,7 +663,11 @@ class Budget(Base):
     def evaluate_impact(
         self, spent_amount: Decimal | str | float | int
     ) -> dict[str, Any]:
-        """Calcula el consumo acumulado, el saldo restante y el estado frente al tope."""
+        """Calcula el consumo acumulado, el saldo restante y el estado frente al tope.
+
+        Obsoleto: no lo usa la API. El CU07 calcula el impacto en
+        app.modules.budgets.service (el restante puede ser negativo).
+        """
         limit = quantize_money(self.amount)
         spent = quantize_money(spent_amount)
         remaining = quantize_money(max(Decimal("0.00"), limit - spent))
@@ -693,7 +697,11 @@ class Budget(Base):
         spent_amount: Decimal | str | float | int,
         category_name: str = "la categoría",
     ) -> Alert | None:
-        """Construye un objeto Alert si el gasto acumulado alcanza o supera el umbral."""
+        """Construye un objeto Alert si el gasto acumulado alcanza o supera el umbral.
+
+        Obsoleto: no lo usa la API. El CU08 evalua varios umbrales por presupuesto en
+        app.modules.alerts.service.evaluate_expense.
+        """
         if self.status != BudgetStatus.ACTIVO:
             return None
 

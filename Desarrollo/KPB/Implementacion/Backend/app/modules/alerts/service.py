@@ -33,7 +33,7 @@ from app.integrations.redis.notifications import NotificationBus
 from app.modules.alerts import repository
 from app.modules.alerts.schemas import AlertOut, ThresholdOut, iso_utc
 from app.modules.budgets import repository as budgets_repository
-from app.modules.budgets.periods import LIMA_TZ, current_period, today_lima
+from app.modules.budgets.periods import LIMA_TZ, current_period, has_started, today_lima
 
 DEFAULT_THRESHOLD = 80
 TITLE_MAX_LENGTH = 120
@@ -169,6 +169,8 @@ def evaluate_expense(
 
     emitted: list[AlertOut] = []
     for budget in budgets:
+        if not has_started(budget, today):
+            continue
         start, end = current_period(budget, today)
         if not start <= expense_date <= end:
             continue  # Sin alertas retroactivas de periodos cerrados (EX9).
@@ -203,7 +205,15 @@ def _threshold_exists() -> AppError:
     return AppError(409, "THRESHOLD_EXISTS", "Ya tienes un umbral con ese porcentaje.")
 
 
-def _budget_or_404(
+def validate_thresholds(percentages: list[int]) -> None:
+    """Lista de umbrales: no vacia, 1-100 y sin repetidos (BR-067, BR-068)."""
+    if not percentages or any(not 1 <= p <= 100 for p in percentages):
+        raise _invalid_threshold()
+    if len(set(percentages)) != len(percentages):
+        raise _threshold_exists()
+
+
+def budget_or_404(
     db: Session, user: User, budget_id: uuid.UUID, for_update: bool = False
 ) -> Budget:
     budget = budgets_repository.get_budget(db, user.user_id, budget_id, for_update)
@@ -212,7 +222,7 @@ def _budget_or_404(
     return budget
 
 
-def _active_out(db: Session, budget: Budget) -> list[ThresholdOut]:
+def active_thresholds_out(db: Session, budget: Budget) -> list[ThresholdOut]:
     """Umbrales activos; `triggered` indica si ya alertaron en el periodo vigente."""
     start, _ = current_period(budget, today_lima())
     issued = repository.issued_threshold_ids(db, budget.budget_id, start)
@@ -224,13 +234,13 @@ def _active_out(db: Session, budget: Budget) -> list[ThresholdOut]:
 
 
 def list_thresholds(db: Session, user: User, budget_id: uuid.UUID) -> list[ThresholdOut]:
-    return _active_out(db, _budget_or_404(db, user, budget_id))
+    return active_thresholds_out(db, budget_or_404(db, user, budget_id))
 
 
 def add_threshold(db: Session, user: User, budget_id: uuid.UUID, percentage: int) -> ThresholdOut:
     if not 1 <= percentage <= 100:
         raise _invalid_threshold()
-    budget = _budget_or_404(db, user, budget_id, for_update=True)
+    budget = budget_or_404(db, user, budget_id, for_update=True)
     existing = repository.thresholds_of(db, budget.budget_id)
     if any(t.is_active and t.percentage == percentage for t in existing):
         raise _threshold_exists()
@@ -251,19 +261,15 @@ def add_threshold(db: Session, user: User, budget_id: uuid.UUID, percentage: int
 def replace_thresholds(
     db: Session, user: User, budget_id: uuid.UUID, percentages: list[int]
 ) -> list[ThresholdOut]:
-    if not percentages or any(not 1 <= p <= 100 for p in percentages):
-        raise _invalid_threshold()
-    if len(set(percentages)) != len(percentages):
-        raise _threshold_exists()
-
-    budget = _budget_or_404(db, user, budget_id, for_update=True)
+    validate_thresholds(percentages)
+    budget = budget_or_404(db, user, budget_id, for_update=True)
     for threshold in repository.thresholds_of(db, budget.budget_id):
         if threshold.percentage not in percentages:
             threshold.is_active = False
     for percentage in percentages:
         _save_threshold(db, budget, percentage)
     db.flush()
-    result = _active_out(db, budget)
+    result = active_thresholds_out(db, budget)
     db.commit()
     return result
 
@@ -271,7 +277,7 @@ def replace_thresholds(
 def deactivate_threshold(
     db: Session, user: User, budget_id: uuid.UUID, threshold_id: uuid.UUID
 ) -> None:
-    budget = _budget_or_404(db, user, budget_id, for_update=True)
+    budget = budget_or_404(db, user, budget_id, for_update=True)
     thresholds = repository.thresholds_of(db, budget.budget_id)
     target = next(
         (t for t in thresholds if t.threshold_id == threshold_id and t.is_active), None

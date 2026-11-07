@@ -1,4 +1,4 @@
-"""Lecturas de presupuestos y consumo que necesita el CU08."""
+"""Acceso a datos de presupuestos (CU07) y consumo del periodo (CU07, CU08)."""
 
 from __future__ import annotations
 
@@ -6,12 +6,13 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.entities import (
     Budget,
     BudgetStatus,
+    Category,
     Currency,
     Transaction,
     TransactionStatus,
@@ -66,3 +67,42 @@ def consumed_in_period(db: Session, budget: Budget, start: date, end: date) -> D
         Transaction.transacted_at < datetime.combine(end + timedelta(days=1), time.min, LIMA_TZ),
     )
     return quantize_money(db.execute(stmt).scalar_one())
+
+
+def list_budgets(
+    db: Session,
+    user_id: uuid.UUID,
+    status: BudgetStatus | None,
+    category_id: uuid.UUID | None,
+) -> list[Budget]:
+    stmt = (
+        select(Budget)
+        .options(selectinload(Budget.category))
+        .where(Budget.user_id == user_id)
+        .order_by(Budget.created_at.desc(), Budget.budget_id)
+    )
+    if status is not None:
+        stmt = stmt.where(Budget.status == status)
+    if category_id is not None:
+        stmt = stmt.where(Budget.category_id == category_id)
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_category(db: Session, user_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
+    """Categoria del sistema o del usuario; una ajena se trata como inexistente."""
+    stmt = select(Category).where(
+        Category.category_id == category_id,
+        or_(Category.user_id.is_(None), Category.user_id == user_id),
+    )
+    return db.execute(stmt).scalars().first()
+
+
+def active_budget_for_category(
+    db: Session, user_id: uuid.UUID, category_id: uuid.UUID
+) -> Budget | None:
+    stmt = select(Budget).where(
+        Budget.user_id == user_id,
+        Budget.category_id == category_id,
+        Budget.status == BudgetStatus.ACTIVO,
+    )
+    return db.execute(stmt).scalars().first()
