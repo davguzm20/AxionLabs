@@ -1,11 +1,11 @@
 import type {
   CategoriesResponse,
   Category,
-  ApiCategory,
   ClassificationRequest,
   ClassificationResponse,
 } from '../types/classification.types';
-import { apiRaw } from '../../../lib/api';
+
+const API_BASE = '/api/v1';
 
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -15,21 +15,16 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function getCategories(signal?: AbortSignal): Promise<Category[]> {
-  const response = await apiRaw('/categories', { signal });
-  const result = await parseResponse<CategoriesResponse>(response);
-  return result.data.map((category: ApiCategory) => ({
-    ...category,
-    type: category.type.toUpperCase() as Category['type'],
-    icon: 'circle-help',
-  }));
+export async function getCategories(signal?: AbortSignal): Promise<CategoriesResponse> {
+  const response = await fetch(`${API_BASE}/categories`, { signal });
+  return parseResponse<CategoriesResponse>(response);
 }
 
 export async function classifyTransaction(
   request: ClassificationRequest,
   signal?: AbortSignal,
 ): Promise<ClassificationResponse> {
-  const response = await apiRaw('/categories/suggestions', {
+  const response = await fetch(`${API_BASE}/categories/suggest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

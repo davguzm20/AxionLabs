@@ -18,7 +18,7 @@ export function useHistory(filters: HistoryFilters) {
     queryKey: [...historyQueryKey, 'transactions', ...filterKey],
     queryFn: ({ pageParam, signal }) => listTransactions(filters, pageParam, signal),
     initialPageParam: 1,
-    getNextPageParam: (lastPage) => lastPage.pagination.page < lastPage.pagination.total_pages ? lastPage.pagination.page + 1 : undefined,
+    getNextPageParam: (lastPage) => lastPage.meta.page < lastPage.meta.pages ? lastPage.meta.page + 1 : undefined,
   });
   const summaryQuery = useQuery({
     queryKey: [...historyQueryKey, 'summary', ...filterKey],
@@ -47,7 +47,7 @@ export function useHistory(filters: HistoryFilters) {
 
   return {
     transactions: transactionsQuery.data?.pages.flatMap((page) => page.data) ?? [],
-    total: transactionsQuery.data?.pages[0]?.pagination.total_items ?? 0,
+    total: transactionsQuery.data?.pages[0]?.meta.total ?? 0,
     summary: summaryQuery.data?.by_currency ?? [],
     categories: categoriesQuery.data ?? [],
     wallets: walletsQuery.data ?? [],

@@ -7,12 +7,6 @@ export interface Category {
   icon: string;
 }
 
-export interface ApiCategory {
-  id: string;
-  name: string;
-  type: 'expense' | 'income';
-}
-
 export interface Transaction {
   id: string;
   type: TransactionType;
@@ -34,6 +28,4 @@ export interface ClassificationResponse {
   needs_review: boolean;
 }
 
-export interface CategoriesResponse {
-  data: ApiCategory[];
-}
+export type CategoriesResponse = Category[];

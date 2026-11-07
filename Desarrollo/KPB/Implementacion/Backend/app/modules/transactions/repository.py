@@ -108,12 +108,10 @@ def save_transaction_and_update_balance(
     wallet: Wallet,
     balance_delta: Decimal,
 ) -> None:
-    """Inserta la transacción y actualiza el saldo sin confirmar.
-
-    El servicio hace el commit después de evaluar las alertas del CU08, para que todo
-    ocurra en una sola transacción de BD.
-    """
+    """Inserta la transacción y actualiza el saldo del monedero en la misma sesión atómica."""
     db.add(transaction)
     wallet.current_balance += balance_delta
-    db.flush()
+    db.commit()
+    db.refresh(transaction)
+    db.refresh(wallet)
 

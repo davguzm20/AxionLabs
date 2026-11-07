@@ -6,6 +6,7 @@ import type {
   BudgetStatus,
   BudgetUpdatePayload,
   Category,
+  CategoryListResponse,
 } from '../types/budget.types';
 
 export async function listBudgets(
@@ -21,11 +22,10 @@ export async function getBudget(id: string, signal?: AbortSignal): Promise<Budge
 }
 
 export async function listExpenseCategories(signal?: AbortSignal): Promise<Category[]> {
-  const query = new URLSearchParams({ type: 'expense' });
-  const response = await api<{ data: Array<{ id: string; name: string; type: 'expense' | 'income' }> }>(`/categories?${query.toString()}`, { signal });
-  return response.data
-    .filter((category) => category.type === 'expense')
-    .map((category) => ({ ...category, type: 'EXPENSE' as const, icon: 'circle-help' }));
+  const query = new URLSearchParams({ type: 'EXPENSE' });
+  const response = await api<CategoryListResponse | Category[]>(`/categories?${query.toString()}`, { signal });
+  const categories = Array.isArray(response) ? response : response.data;
+  return categories.filter((category) => category.type === 'EXPENSE' && category.status !== 'INACTIVE');
 }
 
 export async function createBudget(payload: BudgetCreatePayload): Promise<Budget> {
