@@ -1,6 +1,6 @@
 """Periodo vigente de un presupuesto (03-domain/calculations.md).
 
-Parte minima del CU07 que necesita el CU08: el CRUD de presupuestos queda en KPB-CTG.
+Compartido por el CU07 (KPB-CTG) y el CU08 (KPB-MA).
 """
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ LIMA_TZ = ZoneInfo("America/Lima")
 
 def today_lima() -> date:
     return datetime.now(LIMA_TZ).date()
+
+
+def has_started(budget: Budget, today: date) -> bool:
+    """Un periodo personalizado futuro aun no empieza: su consumo es 0."""
+    return budget.period_type != PeriodType.PERSONALIZADO or today >= budget.start_date
 
 
 def current_period(budget: Budget, today: date) -> tuple[date, date]:

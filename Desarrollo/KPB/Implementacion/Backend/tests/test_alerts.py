@@ -1,3 +1,5 @@
+# ruff: noqa: F811
+# Las fixtures de pytest importadas de tests.sqlite_db parecen redefinirse.
 """Pruebas del CU08 (KPB-MA): evaluacion de umbrales, bandeja, umbrales y SSE.
 
 Los flujos corren con el ORM real sobre SQLite en memoria, para ejercer consultas,
@@ -14,20 +16,17 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
-from zoneinfo import ZoneInfo
 
 import fakeredis
 import fakeredis.aioredis
 import pytest
-from sqlalchemy import DefaultClause, create_engine, select, text
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-from sqlalchemy.schema import CreateTable
+from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.database import Base, get_db
+from app.database import get_db
 from app.entities import (
     Alert,
     AlertPriority,
@@ -44,9 +43,7 @@ from app.entities import (
     Transaction,
     TransactionStatus,
     TransactionType,
-    User,
     Wallet,
-    WalletType,
 )
 from app.integrations.ai.extractor import ExtractedData
 from app.integrations.redis.notifications import (
@@ -61,111 +58,18 @@ from app.modules.auth.deps import CurrentSession, get_current_session
 from app.modules.budgets import repository as budgets_repository
 from app.modules.budgets.periods import current_period
 from app.modules.notifications import sse
-from app.modules.transactions import repository as transactions_repository
 from app.modules.transactions import service as transactions_service
 from app.modules.transactions.schemas import TextTransactionRequest
-
-LIMA = ZoneInfo("America/Lima")
-TODAY = date(2026, 10, 27)
-REAL_SAVE = transactions_repository.save_transaction_and_update_balance
-
-
-@pytest.fixture
-def engine():
-    """Crea las tablas del ORM en SQLite, con los defaults de PostgreSQL adaptados."""
-    engine = create_engine(
-        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
-    )
-    tables = Base.metadata.sorted_tables
-    originals = {}
-    for table in tables:
-        for column in table.columns:
-            originals[column] = column.server_default
-            default = str(getattr(column.server_default, "arg", ""))
-            if "gen_random_uuid" in default:
-                column.server_default = None
-            elif "now" in default:
-                column.server_default = DefaultClause(text("CURRENT_TIMESTAMP"))
-    with engine.begin() as connection:
-        for table in tables:
-            connection.execute(CreateTable(table))
-        connection.execute(
-            text(
-                "CREATE UNIQUE INDEX uq_budget_thresholds_active "
-                "ON budget_thresholds(budget_id, percentage) WHERE is_active = 1"
-            )
-        )
-    for column, server_default in originals.items():
-        column.server_default = server_default
-    yield engine
-    engine.dispose()
-
-
-@pytest.fixture
-def db(engine, monkeypatch):
-    # Restaura el guardado real, sustituido por el doble global de conftest.
-    monkeypatch.setattr(
-        transactions_repository, "save_transaction_and_update_balance", REAL_SAVE
-    )
-    monkeypatch.setattr(alerts_service, "EVALUATION_TIMEOUT", text("SELECT 1"))
-    monkeypatch.setattr(alerts_service, "today_lima", lambda: TODAY)
-    maker = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    with maker() as session:
-        yield session
-
-
-def make_user(db: Session, email: str = "andrea@example.com") -> User:
-    user = User(name="Andrea", surname="Quispe", email=email, password="x")
-    db.add(user)
-    db.flush()
-    return user
-
-
-def make_category(db: Session, name: str = "Alimentación") -> Category:
-    category = Category(name=name)
-    db.add(category)
-    db.flush()
-    return category
-
-
-def make_wallet(db: Session, user: User, currency: Currency = Currency.PEN) -> Wallet:
-    wallet = Wallet(
-        user_id=user.user_id,
-        name=f"Monedero {currency.value}",
-        type=WalletType.EFECTIVO,
-        currency=currency,
-        initial_balance=Decimal(1000),
-        current_balance=Decimal(1000),
-    )
-    db.add(wallet)
-    db.flush()
-    return wallet
-
-
-def make_budget(
-    db: Session,
-    user: User,
-    category: Category,
-    thresholds: tuple[int, ...] = (80, 100),
-    amount: str = "300",
-    **changes,
-) -> Budget:
-    fields = {
-        "user_id": user.user_id,
-        "category_id": category.category_id,
-        "amount": Decimal(amount),
-        "currency": Currency.PEN,
-        "period_type": PeriodType.MENSUAL,
-        "period_days": 30,
-        "start_date": date(2026, 10, 1),
-    } | changes
-    budget = Budget(**fields)
-    db.add(budget)
-    db.flush()
-    for percentage in thresholds:
-        db.add(BudgetThreshold(budget_id=budget.budget_id, percentage=percentage))
-    db.commit()
-    return budget
+from tests.sqlite_db import (  # noqa: F401
+    LIMA,
+    TODAY,
+    db,
+    engine,
+    make_budget,
+    make_category,
+    make_user,
+    make_wallet,
+)
 
 
 def spend(
