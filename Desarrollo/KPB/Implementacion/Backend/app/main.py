@@ -8,6 +8,7 @@ from app.modules.budgets.router import router as budgets_router
 from app.modules.categories.router import router as categories_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.transactions.router import router as transactions_router
+from app.modules.wallets.router import router as wallets_router
 
 app = FastAPI(
     title="KhipuBot API",
@@ -25,6 +26,7 @@ app.include_router(transactions_router, prefix="/api/v1")
 app.include_router(budgets_router, prefix="/api/v1")
 app.include_router(thresholds_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
+app.include_router(wallets_router, prefix="/api/v1")
 
 
 @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
