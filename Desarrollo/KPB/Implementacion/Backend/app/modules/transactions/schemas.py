@@ -9,6 +9,9 @@ Define los contratos de entrada y salida respetando las convenciones de KPB-Spec
 from __future__ import annotations
 
 import uuid
+from datetime import date
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.alerts.schemas import AlertOut
@@ -135,3 +138,31 @@ class ReceiptConfirmRequest(BaseModel):
     transaction_date: str = Field(description="Fecha de la transacción en formato YYYY-MM-DD")
     category_id: uuid.UUID = Field(description="ID de la categoría confirmada")
     wallet_id: uuid.UUID = Field(description="ID del monedero al que se aplicará el cargo")
+
+
+class VoicePreviewResponse(BaseModel):
+    """Respuesta HTTP 200 con la vista previa de una nota de voz (CU03, Paso 1)."""
+
+    preview_id: uuid.UUID = Field(description="Identificador temporal de la vista previa (TTL 10 min)")
+    transcript: str = Field(description="Texto transcrito; se muestra siempre antes de guardar")
+    wallet_id: uuid.UUID = Field(description="Monedero sugerido para la confirmación")
+    extracted: ExtractedReceiptData = Field(description="Campos extraídos de la transcripción")
+    confidence: float = Field(description="Confianza de la extracción entre 0 y 1")
+    requires_confirmation: bool = True
+
+
+class VoiceConfirmRequest(BaseModel):
+    """Datos revisados por el usuario para guardar la nota de voz (CU03, Paso 2)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    preview_id: uuid.UUID
+    type: Literal["EXPENSE", "INCOME"]
+    amount: str
+    currency: Literal["PEN", "USD"]
+    concept: str = Field(min_length=1, max_length=200)
+    merchant: str | None = None
+    ruc: str | None = None
+    transaction_date: date
+    category_id: uuid.UUID
+    wallet_id: uuid.UUID
