@@ -1,10 +1,10 @@
-"""KPB-RTT / KPB-RTF: Lógica de negocio para Registro de Transacciones por Texto (CU02) y Foto/OCR (CU04).
+"""KPB-RTT / KPB-RTV / KPB-RTF: Registro de transacciones por texto (CU02), voz (CU03) y foto (CU04).
 
 Orquesta:
 1. Extracción con IA (Texto libre y Visión multimodal).
 2. Validaciones de negocio (monto existente, coherencia de moneda, fechas válidas, formato de imagen).
 3. Clasificación de categoría con fallback a 'Otros'.
-4. Manejo de vistas previas temporales en Redis (TTL 10 min) para comprobantes.
+4. Manejo de vistas previas temporales en Redis (TTL 10 min) para voz y comprobantes.
 5. Actualización atómica de saldos de monedero y persistencia en PostgreSQL.
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -33,9 +33,19 @@ from app.entities import (
 from app.integrations.ai.extractor import extract_transaction_from_text
 from app.integrations.redis.notifications import NotificationBus
 from app.modules.alerts import service as alerts_service
+from app.integrations.ai.transcription import transcribe
 from app.integrations.ai.vision import extract_receipt_from_image
+from app.integrations.redis.rate_limit import RateLimiter
 from app.integrations.redis.previews import ReceiptPreviewStore
 from app.modules.transactions import repository
+from app.modules.alerts.schemas import AlertOut
+from app.modules.categories import service as categories_service
+from app.modules.categories.schemas import CategorySuggestRequest
+from app.modules.transactions.audio_validation import (
+    MAX_AUDIO_SECONDS,
+    audio_too_long,
+    validate_audio,
+)
 from app.modules.transactions.image_validation import validate_and_prepare_image
 from app.modules.transactions.schemas import (
     CategoryInfo,
@@ -46,6 +56,8 @@ from app.modules.transactions.schemas import (
     TextTransactionResponse,
     TransactionCorrectionRequest,
     TransactionOut,
+    VoiceConfirmRequest,
+    VoicePreviewResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +86,41 @@ def _validate_transaction_date(tx_date: date) -> None:
 # =============================================================================
 # CU02: Registro de Transacción por Texto Libre
 # =============================================================================
+
+def persist_confirmed(
+    db: Session,
+    user: User,
+    transaction: Transaction,
+    wallet: Wallet,
+    balance_delta: Decimal,
+    bus: NotificationBus | None,
+) -> list[AlertOut]:
+    """Guarda la transacción, actualiza el saldo y evalúa alertas en una sola transacción de BD.
+
+    Si algo falla se revierte todo (07-architecture/backend.md). Las alertas se publican
+    por SSE solo después del commit.
+    """
+    try:
+        repository.save_transaction_and_update_balance(
+            db=db,
+            transaction=transaction,
+            wallet=wallet,
+            balance_delta=balance_delta,
+        )
+        alerts = alerts_service.evaluate_expense(db, transaction)
+        db.commit()
+    except SQLAlchemyError as error:
+        db.rollback()
+        # Solo el tipo: el mensaje de SQLAlchemy incluye los montos de la consulta.
+        logger.error("No se pudo registrar la transacción: %s", type(error).__name__)
+        raise AppError(500, "INTERNAL_ERROR", "Ocurrió un error. Intenta de nuevo.") from None
+    db.refresh(transaction)
+    db.refresh(wallet)
+
+    if bus is not None:
+        alerts_service.publish_alerts(bus, user.user_id, alerts)
+    return alerts
+
 
 def create_from_text(
     db: Session,
@@ -174,25 +221,7 @@ def create_from_text(
     )
 
     # 10. Persistir, actualizar saldo y evaluar alertas (CU08) en una sola transacción de BD
-    try:
-        repository.save_transaction_and_update_balance(
-            db=db,
-            transaction=transaction,
-            wallet=wallet,
-            balance_delta=balance_delta,
-        )
-        alerts = alerts_service.evaluate_expense(db, transaction)
-        db.commit()
-    except SQLAlchemyError as error:
-        db.rollback()
-        # Solo el tipo: el mensaje de SQLAlchemy incluye los montos de la consulta.
-        logger.error("No se pudo registrar el gasto: %s", type(error).__name__)
-        raise AppError(500, "INTERNAL_ERROR", "Ocurrió un error. Intenta de nuevo.") from None
-    db.refresh(transaction)
-    db.refresh(wallet)
-
-    if bus is not None:
-        alerts_service.publish_alerts(bus, user.user_id, alerts)
+    alerts = persist_confirmed(db, user, transaction, wallet, balance_delta, bus)
 
     # 11. Armar respuesta según contrato OpenAPI
     symbol = _get_currency_symbol(wallet.currency)
@@ -504,23 +533,8 @@ def confirm_receipt(
         source_type=SourceType.OCR,
     )
 
-    # 9. Guardar y actualizar saldo atómicamente
-    repository.save_transaction_and_update_balance(
-        db=db,
-        transaction=transaction,
-        wallet=wallet,
-        balance_delta=balance_delta,
-    )
-
-    # 10. Evaluar alertas si el bus está disponible
-    alerts: list[dict] = []
-    try:
-        from app.modules.alerts import service as alerts_service
-        alerts = alerts_service.evaluate_transaction(db, user.user_id, transaction)
-        if bus is not None:
-            alerts_service.publish_alerts(bus, user.user_id, alerts)
-    except Exception as exc:
-        logger.warning(f"Evaluación de alertas omitida o no configurada: {exc}")
+    # 9-10. Guardar, actualizar saldo, evaluar alertas y confirmar en una sola transacción de BD
+    alerts = persist_confirmed(db, user, transaction, wallet, balance_delta, bus)
 
     # 11. Eliminar preview de Redis
     preview_store.delete(data.preview_id)
@@ -556,4 +570,218 @@ def confirm_receipt(
         wallet_balance=formatted_balance,
         alerts=alerts,
         message=message,
+    )
+
+
+# =============================================================================
+# CU03: Registro de Transacción por Voz
+# =============================================================================
+
+VOICE_REQUESTS_PER_MINUTE = 30
+# Respuestas que no aportan contenido (12-prompts/system-prompts/transcribe.md).
+FILLER_WORDS = {"mmm", "mm", "hmm", "eh", "ehh", "ehm", "ah", "ahh", "uh", "um", "este"}
+
+
+def _unintelligible() -> AppError:
+    return AppError(
+        422,
+        "AUDIO_UNINTELLIGIBLE",
+        "No pude entender el audio. ¿Puedes repetirlo o escribirlo?",
+    )
+
+
+def clean_transcript(text: str) -> str:
+    """Texto útil de la transcripción, o AUDIO_UNINTELLIGIBLE si no lo hay (BR-083)."""
+    cleaned = " ".join(text.split())
+    words = [w.strip(".,;:¡!¿?…").lower() for w in cleaned.split()]
+    if len(cleaned) < 2 or all(not w or w in FILLER_WORDS for w in words):
+        raise _unintelligible()
+    return cleaned[:500]
+
+
+def create_voice_preview(
+    db: Session,
+    user: User,
+    audio: bytes,
+    wallet_id: uuid.UUID | None,
+    language: str,
+    preview_store: ReceiptPreviewStore,
+    rate_limiter: RateLimiter,
+) -> VoicePreviewResponse:
+    """CU03 - Paso 1: transcribe, extrae y clasifica sin guardar nada en la BD.
+
+    El audio vive solo en memoria durante la petición; el preview guarda texto.
+    """
+    rate_limiter.hit("voice", user.user_id, VOICE_REQUESTS_PER_MINUTE)
+    validated = validate_audio(audio)
+
+    wallet = repository.get_wallet(db, user.user_id, wallet_id)
+    if wallet is None:
+        raise AppError(
+            409, "NO_ACTIVE_WALLET", "Crea un monedero antes de registrar una transacción."
+        )
+
+    transcription = transcribe(validated.data, validated.mime_type, language)
+    if (transcription.duration_seconds or 0) > MAX_AUDIO_SECONDS:
+        raise audio_too_long()
+    transcript = clean_transcript(transcription.text)
+
+    extracted = extract_transaction_from_text(
+        text=transcript, default_currency=wallet.currency.value
+    )
+    tx_type = "INCOME" if extracted.type == "INCOME" else "EXPENSE"
+    concept = (extracted.concept or transcript)[:200]
+    suggestion = categories_service.suggest_category(
+        db,
+        user,
+        CategorySuggestRequest(type=tx_type, concept=concept, merchant=extracted.merchant),
+    )
+
+    # Sin monto el preview igual se muestra: el usuario lo completa antes de confirmar.
+    amount = f"{extracted.amount:.2f}" if extracted.amount and extracted.amount > 0 else None
+    tx_date = (extracted.transaction_date or datetime.now(LIMA_TZ).date()).isoformat()
+    currency = (extracted.currency or wallet.currency.value).upper()
+
+    preview_id = uuid.uuid4()
+    preview_store.save(
+        preview_id,
+        user.user_id,
+        {"transcript": transcript, "wallet_id": str(wallet.wallet_id)},
+        ttl_seconds=600,
+    )
+
+    return VoicePreviewResponse(
+        preview_id=preview_id,
+        transcript=transcript,
+        wallet_id=wallet.wallet_id,
+        extracted=ExtractedReceiptData(
+            type=tx_type,
+            amount=amount,
+            currency=currency,
+            concept=concept,
+            merchant=extracted.merchant,
+            ruc=None,
+            transaction_date=tx_date,
+            category=CategoryInfo(
+                id=suggestion.category.id,
+                name=suggestion.category.name,
+                icon=suggestion.category.icon or "tag",
+            ),
+        ),
+        confidence=round(min(max(extracted.confidence, 0.0), 1.0), 2),
+        requires_confirmation=True,
+    )
+
+
+def _parse_confirmed_amount(raw: str) -> Decimal:
+    try:
+        amount = Decimal(raw.strip())
+    except (InvalidOperation, AttributeError):
+        amount = None
+    if amount is None or not amount.is_finite() or not Decimal(0) < amount <= Decimal("99999999.99"):
+        raise AppError(422, "INVALID_AMOUNT", "Ingresa un monto válido (máximo 99,999,999.99).")
+    if amount.as_tuple().exponent < -2:
+        raise AppError(422, "INVALID_AMOUNT_PRECISION", "Usa como máximo dos decimales.")
+    return amount.quantize(Decimal("0.01"))
+
+
+def confirm_voice(
+    db: Session,
+    user: User,
+    data: VoiceConfirmRequest,
+    preview_store: ReceiptPreviewStore,
+    bus: NotificationBus | None = None,
+) -> TextTransactionResponse:
+    """CU03 - Paso 2: guarda los datos revisados por el usuario.
+
+    El preview se usa una sola vez: un reintento después de guardar responde
+    PREVIEW_EXPIRED en vez de duplicar la transacción.
+    """
+    expired = AppError(
+        409, "PREVIEW_EXPIRED", "La vista previa expiró. Graba la nota de voz otra vez."
+    )
+    preview = preview_store.get(data.preview_id, user.user_id)
+    if preview is None:
+        raise expired
+    if not preview_store.lock(data.preview_id):
+        raise AppError(
+            409, "IDEMPOTENCY_IN_PROGRESS", "La solicitud está en proceso. Espera un momento."
+        )
+    try:
+        # Releído con el candado tomado: otra confirmación pudo terminar entre medio.
+        if preview_store.get(data.preview_id, user.user_id) is None:
+            raise expired
+        response = _save_voice_transaction(db, user, data, preview["transcript"], bus)
+        preview_store.delete(data.preview_id)
+        return response
+    finally:
+        preview_store.unlock(data.preview_id)
+
+
+def _save_voice_transaction(
+    db: Session,
+    user: User,
+    data: VoiceConfirmRequest,
+    transcript: str,
+    bus: NotificationBus | None,
+) -> TextTransactionResponse:
+    amount = _parse_confirmed_amount(data.amount)
+
+    wallet = repository.get_wallet(db, user.user_id, data.wallet_id, for_update=True)
+    if wallet is None:
+        raise AppError(
+            409, "NO_ACTIVE_WALLET", "El monedero seleccionado no existe o está inactivo."
+        )
+    if data.currency != wallet.currency.value:
+        name = "soles" if wallet.currency == Currency.PEN else "dólares"
+        raise AppError(
+            422,
+            "CURRENCY_MISMATCH",
+            f"El monedero es en {name}. Elige otro monedero o registra el monto en {name}.",
+        )
+    _validate_transaction_date(data.transaction_date)
+
+    category = repository.get_category_by_id(db, user.user_id, data.category_id)
+    if category is None:
+        raise AppError(422, "INVALID_CATEGORY", "Selecciona una categoría válida.")
+
+    is_income = data.type == "INCOME"
+    tx_date = data.transaction_date
+    transacted_at = datetime(tx_date.year, tx_date.month, tx_date.day, 12, tzinfo=LIMA_TZ)
+    transaction = Transaction(
+        user_id=user.user_id,
+        wallet_id=wallet.wallet_id,
+        category_id=category.category_id,
+        amount=amount,
+        type=TransactionType.INGRESO if is_income else TransactionType.GASTO,
+        currency=wallet.currency,
+        concept=data.concept.strip(),
+        transacted_at=transacted_at,
+        status=TransactionStatus.CONFIRMADA,
+        source_input=transcript,
+        source_type=SourceType.VOZ,
+    )
+    alerts = persist_confirmed(
+        db, user, transaction, wallet, amount if is_income else -amount, bus
+    )
+
+    symbol = _get_currency_symbol(wallet.currency)
+    return TextTransactionResponse(
+        transaction=TransactionOut(
+            id=transaction.transaction_id,
+            type=data.type,
+            amount=f"{transaction.amount:.2f}",
+            currency=wallet.currency.value,
+            concept=transaction.concept,
+            merchant=data.merchant,
+            transaction_date=tx_date.isoformat(),
+            wallet_id=wallet.wallet_id,
+            category=CategoryInfo(id=category.category_id, name=category.name, icon="tag"),
+            source="VOICE",
+            needs_review=False,
+            created_at=(transaction.created_at or transacted_at).isoformat(),
+        ),
+        wallet_balance=f"{wallet.current_balance:.2f}",
+        alerts=alerts,
+        message=f"Listo, registré {symbol} {transaction.amount:.2f} en {category.name}.",
     )
