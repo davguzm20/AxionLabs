@@ -59,9 +59,12 @@ export function TransactionPreviewCard({
   const categoryOptions = categories.filter((category) => category.type === draft.type && category.status !== 'INACTIVE');
   const previewCategory = preview.extracted.category;
   const hasPreviewCategory = categoryOptions.some((category) => category.id === previewCategory.id);
-  const categoriesForSelect = hasPreviewCategory || (previewCategory.type && previewCategory.type !== draft.type)
-    ? categoryOptions
-    : [...categoryOptions, { ...previewCategory, type: previewCategory.type ?? draft.type }];
+  const categoriesForSelect =
+    hasPreviewCategory
+    || previewCategory.status === 'INACTIVE'
+    || (previewCategory.type && previewCategory.type !== draft.type)
+      ? categoryOptions
+      : [...categoryOptions, { ...previewCategory, type: previewCategory.type ?? draft.type }];
   const walletOptions = wallets.filter((wallet) => wallet.currency === draft.currency && wallet.status !== 'INACTIVE');
   const selectedCategoryAvailable = categoriesForSelect.some((category) => category.id === draft.category_id);
   const selectedWalletAvailable = walletOptions.some((wallet) => wallet.id === draft.wallet_id);

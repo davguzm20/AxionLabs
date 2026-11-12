@@ -367,7 +367,7 @@ describe('CU02 — peticiones, recuperación de errores y persistencia del front
 
   // La limpieza aislada de sesión sí funciona (session.test.tsx); la escritura
   // posterior del catch/useEffect del chat vuelve a persistir los datos privados.
-  it.fails.each(['extraer', 'guardar'])('DEFECTO CU02: no vuelve a guardar el chat después de expirar la sesión al %s', async (step) => {
+  it.each(['extraer', 'guardar'])('DEFECTO CU02: no vuelve a guardar el chat después de expirar la sesión al %s', async (step) => {
     server.use(http.post(step === 'extraer' ? '*/api/v1/extractions/text' : '*/api/v1/transactions', () => contractError(401, 'SESSION_EXPIRED', 'Tu sesión expiró.')));
     renderChat();
     const user = await sendText('gasto privado de 15 soles');

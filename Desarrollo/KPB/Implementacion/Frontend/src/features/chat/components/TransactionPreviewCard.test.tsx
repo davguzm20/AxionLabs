@@ -189,7 +189,7 @@ describe('CU02 — tarjeta de vista previa por texto', () => {
     expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({ type: 'INCOME', currency: 'USD', category_id: salaryCategory.id });
   });
 
-  it.fails('DEFECTO CU02: una categoría de vista previa inactiva no debe habilitar aceptar', async () => {
+  it('DEFECTO CU02: una categoría de vista previa inactiva no debe habilitar aceptar', async () => {
     const inactive = { ...foodCategory, status: 'INACTIVE' };
     server.use(http.get('*/api/v1/categories', () => HttpResponse.json({ data: [{ ...inactive, type: 'expense' }] })));
     renderPreview({ preview: makeTextPreview({ category: inactive }) });

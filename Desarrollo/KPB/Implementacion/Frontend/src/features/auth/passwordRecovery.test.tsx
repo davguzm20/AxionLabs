@@ -311,7 +311,7 @@ describe('CU01 — recuperación de contraseña (contratos simulados, no persist
 
   // Fallos esperados y documentados: el componente atribuye estos errores al código.
   // No son pruebas omitidas: si la aplicación corrige el mensaje, Vitest exige actualizar esta marca.
-  it.fails.each([
+  it.each([
     ['PASSWORD_MISMATCH', 'Las contraseñas no coinciden.'],
     ['PASSWORD_POLICY_VIOLATION', 'La contraseña no cumple la política mínima definida.'],
   ])('DEFECTO CU01: muestra el mensaje de %s sin atribuirlo al código de recuperación', async (code, message) => {
