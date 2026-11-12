@@ -26,8 +26,11 @@ type ApiError = Error & { status?: number; code?: string };
 function highestPriorityAlert(alerts: ChatAlert[]): ChatAlert | undefined {
   return alerts.reduce<ChatAlert | undefined>((highest, alert) => {
     if (!highest) return alert;
-    const priority = (value: ChatAlert) => value.priority?.toLocaleLowerCase() === 'high' ? 2 : value.threshold_percentage ?? 0;
-    return priority(alert) > priority(highest) ? alert : highest;
+    const isHighPriority = (value: ChatAlert) => value.priority?.toLocaleLowerCase() === 'high';
+    const alertIsHighPriority = isHighPriority(alert);
+    const highestIsHighPriority = isHighPriority(highest);
+    if (alertIsHighPriority !== highestIsHighPriority) return alertIsHighPriority ? alert : highest;
+    return (alert.threshold_percentage ?? 0) > (highest.threshold_percentage ?? 0) ? alert : highest;
   }, undefined);
 }
 
@@ -76,11 +79,15 @@ export function ChatPage() {
   const [textValidationError, setTextValidationError] = useState<string>();
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const previewIdempotencyKeys = useRef(new Map<string, string>());
+  const previewIdempotencyKeys = useRef(new Map<string, { payload: string; key: string }>());
   const savingPreviewIds = useRef(new Set<string>());
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
+    if (!localStorage.getItem('access_token')) {
+      localStorage.removeItem('khipubot_chat_messages');
+      return;
+    }
     if (messages.length === 0) return;
     try {
       const persistentMessages = messages.map((message) => message.kind === 'preview'
@@ -256,8 +263,12 @@ export function ChatPage() {
     try {
       const preview = messages.find((message) => message.kind === 'preview' && message.id === messageId);
       if (!preview || preview.kind !== 'preview') return;
-      const idempotencyKey = previewIdempotencyKeys.current.get(messageId) ?? crypto.randomUUID();
-      previewIdempotencyKeys.current.set(messageId, idempotencyKey);
+      const idempotencyPayload = JSON.stringify(transactionDraft);
+      const previousIdempotency = previewIdempotencyKeys.current.get(messageId);
+      const idempotencyKey = previousIdempotency?.payload === idempotencyPayload
+        ? previousIdempotency.key
+        : crypto.randomUUID();
+      previewIdempotencyKeys.current.set(messageId, { payload: idempotencyPayload, key: idempotencyKey });
       console.log('[Chat] Enviando una transacción al backend.');
       const response: SaveResponse = source === 'TEXT'
         ? await api<Api10SavedTransactionResponse>('/transactions', {
@@ -276,7 +287,7 @@ export function ChatPage() {
           }),
         })
         : source === 'VOICE'
-          ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft)
+          ? await confirmVoicePreview(preview.preview.preview_id, transactionDraft, idempotencyKey)
           : await confirmReceiptPreview(preview.preview.preview_id, transactionDraft, preview.preview.ocr_text);
       const savedTransaction = toChatTransaction(response.transaction);
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
