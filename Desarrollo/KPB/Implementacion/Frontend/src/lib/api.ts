@@ -2,7 +2,7 @@ import { ApiError } from './errors';
 
 export { ApiError } from './errors';
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
+export const API_BASE_URL = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/$/, '');
 
 export function buildApiUrl(path: string): string {
   return API_BASE_URL + path;
