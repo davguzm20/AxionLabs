@@ -61,7 +61,7 @@ describe('HistoryPage', () => {
         if (filters.q && !transaction.concept.toLocaleLowerCase('es-PE').includes(filters.q.toLocaleLowerCase('es-PE'))) return false;
         return true;
       });
-      return { data: filtered.slice((page - 1) * 20, page * 20), meta: { page, page_size: 20, total: filtered.length, pages: Math.ceil(filtered.length / 20) } };
+      return { data: filtered.slice((page - 1) * 20, page * 20), pagination: { page, page_size: 20, total_items: filtered.length, total_pages: Math.ceil(filtered.length / 20) } };
     });
     historyMocks.getTransactionSummary.mockImplementation(async (filters: HistoryFilters) => {
       const filtered = transactions.filter((transaction) => transaction.transaction_date >= filters.date_from && transaction.transaction_date <= filters.date_to && (!filters.type || transaction.type === filters.type));
@@ -71,7 +71,7 @@ describe('HistoryPage', () => {
     });
     historyMocks.listHistoryCategories.mockResolvedValue([foodCategory, friendCategory, salaryCategory]);
     historyMocks.getTransaction.mockImplementation(async (id: string) => transactions.find((transaction) => transaction.id === id)!);
-    historyMocks.correctTransaction.mockImplementation(async (id: string, correction: { category_id?: string; concept?: string }) => {
+    historyMocks.correctTransaction.mockImplementation(async (id: string, correction: { category_id?: string; concept?: string; category_source?: 'manual' }) => {
       const category = [foodCategory, friendCategory, salaryCategory].find((item) => item.id === correction.category_id);
       transactions = transactions.map((transaction) => transaction.id === id ? {
         ...transaction,
@@ -112,7 +112,7 @@ describe('HistoryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Guardar cambios' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent('Categoría y concepto actualizados.');
-    expect(historyMocks.correctTransaction).toHaveBeenCalledWith('tx-dinner', { category_id: 'friends', concept: 'Cena con amigos' });
+    expect(historyMocks.correctTransaction).toHaveBeenCalledWith('tx-dinner', { category_id: 'friends', category_source: 'manual', concept: 'Cena con amigos' });
     expect(dialog).toBeInTheDocument();
   });
 });

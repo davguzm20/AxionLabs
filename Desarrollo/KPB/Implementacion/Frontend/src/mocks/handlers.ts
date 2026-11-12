@@ -266,10 +266,14 @@ export function resetBudgetMocks() {
   transactionPostCallCount = 0;
   resetCu08ThresholdConfigs();
   resetSavedTransactions();
-  savedWallets.splice(0, savedWallets.length, ...mockWalletSeeds.map((wallet) => ({ ...wallet })));
+  resetWalletMocks();
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
   resetCu08Notifications();
+}
+
+export function resetWalletMocks(wallets: Wallet[] = mockWalletSeeds) {
+  savedWallets.splice(0, savedWallets.length, ...wallets.map((wallet) => ({ ...wallet })));
 }
 
 export function resetNotificationMocks() {
@@ -899,7 +903,7 @@ export const handlers = [
     const name = body.name?.trim() ?? '';
     if (!name) {
       return HttpResponse.json(
-        { error: { code: 'WALLET_NAME_EMPTY', message: 'El nombre del monedero no puede estar vacío. Por favor, escoja un nombre apropiado.', details: [], trace_id: 'req_' + crypto.randomUUID()} },
+        { error: { code: 'WALLET_NAME_EMPTY', message: 'El nombre del monedero no puede estar vacío. Por favor, escoja un nombre apropiado', details: [], trace_id: 'req_' + crypto.randomUUID()} },
         { status: 422 },
       );
     }
@@ -918,7 +922,7 @@ export const handlers = [
     }
     if (hasDuplicateWalletName(name)) {
       return HttpResponse.json(
-        { error: { code: 'WALLET_NAME_DUPLICATED', message: 'El nombre del monedero ya está en uso. Por favor, escoja un nombre distinto.', details: [], trace_id: 'req_' + crypto.randomUUID()} },
+        { error: { code: 'WALLET_NAME_DUPLICATED', message: 'El nombre del monedero ya está en uso. Por favor, escoja un nombre distinto', details: [], trace_id: 'req_' + crypto.randomUUID()} },
         { status: 409 },
       );
     }
@@ -928,7 +932,7 @@ export const handlers = [
       && BigInt(initialBalance.split('.')[0] ?? '0') <= 99_999_999n;
     if (!balanceIsValid) {
       return HttpResponse.json(
-        { error: { code: 'INVALID_INITIAL_BALANCE', message: 'El saldo inicial debe ser un monto válido mayor o igual a S/ 0.00.', details: [], trace_id: 'req_' + crypto.randomUUID()} },
+        { error: { code: 'INITIAL_BALANCE_INVALID', message: 'El saldo inicial debe ser un monto válido mayor o igual a S/ 0.00', details: [], trace_id: 'req_' + crypto.randomUUID()} },
         { status: 422 },
       );
     }
@@ -1009,6 +1013,7 @@ export const handlers = [
       confidence: isFallback ? 0.3 : 0.94,
       reason: isFallback ? 'No se encontró una coincidencia clara.' : 'El concepto coincide con esta categoría.',
       needs_review: isFallback,
+      is_fallback: isFallback,
     });
   }),
   http.post('*/api/v1/extractions/text', async ({ request }) => {
@@ -1164,7 +1169,7 @@ export const handlers = [
       return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró la transacción.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
     }
 
-    const body = await request.json() as { category_id?: string; concept?: string };
+    const body = await request.json() as { category_id?: string; concept?: string; category_source?: 'manual' | 'suggested' };
     const category = categoryCatalog.find(({ id, type }) => id === body.category_id && type === existingTransaction.type);
     if (body.category_id && !category) {
       return HttpResponse.json({ error: { code: 'INVALID_CATEGORY', message: 'La categoría seleccionada no es válida.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });

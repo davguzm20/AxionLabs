@@ -80,7 +80,7 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
     try {
       const updated = await api<TransactionUpdateResponse>(`/transactions/${encodeURIComponent(currentTransaction.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ concept: editedConcept.trim(), category_id: selectedCategoryId }),
+        body: JSON.stringify({ concept: editedConcept.trim(), category_id: selectedCategoryId, category_source: 'manual' }),
       });
       setCurrentTransaction((current) => ({ ...current, concept: updated.concept, category: updated.category }));
       setIsEditorOpen(false);
@@ -118,7 +118,10 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
             </button>
           </div>
         ) : (
-          <div className="mt-4 flex w-full gap-2">
+          <div className="mt-4 flex w-full flex-col gap-2">
+            <button type="button" onClick={() => void openCategoryEditor()} disabled={isAccepting} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-ink-300 px-3 text-sm font-medium text-ink-900 disabled:opacity-50">
+              <Pencil aria-hidden="true" size={16} /> Cambiar categoría
+            </button>
             <Link to="/historial" className="inline-flex min-h-11 w-full items-center justify-center rounded-md bg-brand-600 px-3 text-sm font-medium text-white">Ver historial</Link>
           </div>
         )}
