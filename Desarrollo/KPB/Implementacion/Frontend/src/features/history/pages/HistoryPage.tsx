@@ -191,7 +191,10 @@ function HistoryDetailPanel({ transactionId, walletNames, categories, onClose, o
     const correction: TransactionCorrection = {};
     const categoryChanged = editingCategory && categoryId !== transaction.category?.id;
     const conceptChanged = editingConcept && concept.trim() !== transaction.concept;
-    if (categoryChanged) correction.category_id = categoryId;
+    if (categoryChanged) {
+      correction.category_id = categoryId;
+      correction.category_source = 'manual';
+    }
     if (conceptChanged) correction.concept = concept.trim();
     setActionError('');
     try {

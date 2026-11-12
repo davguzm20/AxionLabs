@@ -32,6 +32,7 @@ export interface ClassificationResponse {
   confidence: number;
   reason: string;
   needs_review: boolean;
+  is_fallback?: boolean;
 }
 
 export interface CategoriesResponse {

@@ -10,13 +10,13 @@ import type { WalletCurrency, WalletType } from '../types/wallet.types';
 
 const moneyPattern = /^\d{1,8}(?:\.\d{1,2})?$/;
 const schema = z.object({
-  name: z.string().trim().min(1, 'Ingresa un nombre para el monedero.').max(50, 'El nombre debe tener 50 caracteres o menos.'),
+  name: z.string().trim().min(1, 'El nombre del monedero no puede estar vacío. Por favor, escoja un nombre apropiado').max(50, 'El nombre debe tener 50 caracteres o menos.'),
   type: z.enum(['bank', 'cash']),
   currency: z.enum(['PEN', 'USD']),
   balance: z.string().optional(),
 }).superRefine((values, context) => {
   if (values.balance !== undefined && (!moneyPattern.test(values.balance) || BigInt(values.balance.split('.')[0] ?? '0') > 99_999_999n)) {
-    context.addIssue({ code: 'custom', path: ['balance'], message: 'El saldo inicial debe estar entre 0.00 y 99,999,999.99.' });
+    context.addIssue({ code: 'custom', path: ['balance'], message: 'El saldo inicial debe ser un monto válido mayor o igual a S/ 0.00' });
   }
 });
 
@@ -77,7 +77,7 @@ export function WalletFormPage() {
     setSubmitError(null);
     const normalizedName = values.name.trim().toLocaleLowerCase('es-PE');
     if (wallets.some((item) => item.id !== walletId && item.name.trim().toLocaleLowerCase('es-PE') === normalizedName)) {
-      setSubmitError('El nombre del monedero ya está en uso. Por favor, escoge uno distinto.');
+      setSubmitError('El nombre del monedero ya está en uso. Por favor, escoja un nombre distinto');
       return;
     }
 

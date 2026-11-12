@@ -52,4 +52,5 @@ export interface HistorySummaryResponse {
 export interface TransactionCorrection {
   category_id?: string;
   concept?: string;
+  category_source?: 'manual';
 }
