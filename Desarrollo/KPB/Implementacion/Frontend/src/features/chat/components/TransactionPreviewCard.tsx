@@ -59,12 +59,17 @@ export function TransactionPreviewCard({
   const categoryOptions = categories.filter((category) => category.type === draft.type && category.status !== 'INACTIVE');
   const previewCategory = preview.extracted.category;
   const hasPreviewCategory = categoryOptions.some((category) => category.id === previewCategory.id);
-  const categoriesForSelect = hasPreviewCategory || (previewCategory.type && previewCategory.type !== draft.type)
-    ? categoryOptions
-    : [...categoryOptions, { ...previewCategory, type: previewCategory.type ?? draft.type }];
+  const categoriesForSelect =
+    hasPreviewCategory
+    || previewCategory.status === 'INACTIVE'
+    || (previewCategory.type && previewCategory.type !== draft.type)
+      ? categoryOptions
+      : [...categoryOptions, { ...previewCategory, type: previewCategory.type ?? draft.type }];
   const walletOptions = wallets.filter((wallet) => wallet.currency === draft.currency && wallet.status !== 'INACTIVE');
   const selectedCategoryAvailable = categoriesForSelect.some((category) => category.id === draft.category_id);
   const selectedWalletAvailable = walletOptions.some((wallet) => wallet.id === draft.wallet_id);
+  const amountValue = Number(draft.amount.trim());
+  const validAmount = /^\d{1,8}(?:\.\d{1,2})?$/.test(draft.amount.trim()) && Number.isFinite(amountValue) && amountValue > 0;
 
   useEffect(() => {
     let active = true;
@@ -150,7 +155,7 @@ export function TransactionPreviewCard({
         {saveError && <p role="alert" className="mt-3 rounded-md bg-red-50 p-3 text-sm text-danger-700">{saveError}</p>}
         <div className="mt-4 flex w-full flex-row gap-2">
           <button type="button" onClick={() => setIsEditing(true)} disabled={isSaving} className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border border-ink-300 px-3 text-sm font-medium text-ink-900 disabled:opacity-50"><Pencil aria-hidden="true" size={16} />Editar</button>
-          <button type="button" onClick={() => onConfirm(draft)} disabled={isSaving || !selectedCategoryAvailable || !selectedWalletAvailable} className="min-h-11 min-w-0 flex-1 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">{isSaving ? 'Guardando…' : 'Aceptar'}</button>
+          <button type="button" onClick={() => onConfirm(draft)} disabled={isSaving || !validAmount || !selectedCategoryAvailable || !selectedWalletAvailable} className="min-h-11 min-w-0 flex-1 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">{isSaving ? 'Guardando…' : 'Aceptar'}</button>
         </div>
         {isEditing && <EditTransactionModal amount={draft.amount} concept={draft.concept} categoryId={draft.category_id} categories={categoriesForSelect} onClose={() => setIsEditing(false)} onSave={saveEdits} />}
 

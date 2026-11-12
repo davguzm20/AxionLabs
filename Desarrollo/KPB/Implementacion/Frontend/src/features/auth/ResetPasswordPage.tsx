@@ -52,9 +52,14 @@ export function ResetPasswordPage() {
       window.setTimeout(() => navigate('/login', { replace: true, state: { message: 'Contraseña actualizada. Inicia sesión con tu nueva contraseña.' } }), 1200);
     } catch (error) {
       const apiError = error as ApiError;
-      setErrorMessage(apiError.code === 'TOO_MANY_ATTEMPTS'
-        ? 'Demasiados intentos. Intenta más tarde.'
-        : 'El código no es válido o expiró. Solicita uno nuevo.');
+      setErrorMessage(
+        apiError.code === 'TOO_MANY_ATTEMPTS'
+          ? 'Demasiados intentos. Intenta más tarde.'
+          : apiError.code === 'PASSWORD_MISMATCH'
+            || apiError.code === 'PASSWORD_POLICY_VIOLATION'
+            ? apiError.message
+            : 'El código no es válido o expiró. Solicita uno nuevo.',
+      );
     } finally {
       setLoading(false);
     }

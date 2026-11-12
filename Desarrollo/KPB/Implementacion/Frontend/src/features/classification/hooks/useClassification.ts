@@ -43,15 +43,28 @@ export function useClassification() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
       const categories = await getCategories(signal);
-      const classification = await classifyTransaction({
-        concept: initialTransaction.concept,
-        amount: initialTransaction.amount,
-      }, signal);
+      let classification: ClassificationResponse;
+      try {
+        classification = await classifyTransaction({
+          concept: initialTransaction.concept,
+          amount: initialTransaction.amount,
+        }, signal);
+      } catch (cause) {
+        if (signal?.aborted) return;
+        const fallback = getFallbackCategory(categories);
+        classification = {
+          category: fallback,
+          confidence: 0,
+          reason: cause instanceof Error ? cause.message : 'No se encontró una coincidencia clara.',
+          needs_review: true,
+          is_fallback: true,
+        };
+      }
       const matchingCategory = categories.find(({ id }) => id === classification.category.id);
       const suggestedCategory = matchingCategory ?? getFallbackCategory(categories);
       const validatedClassification = matchingCategory
         ? classification
-        : { ...classification, category: suggestedCategory, needs_review: true };
+        : { ...classification, category: suggestedCategory, needs_review: true, is_fallback: true };
 
       setState((current) => ({
         ...current,

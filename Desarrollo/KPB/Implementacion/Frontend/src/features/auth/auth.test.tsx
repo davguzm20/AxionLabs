@@ -191,7 +191,7 @@ describe('CU01 — autenticación', () => {
     await user.type(screen.getByLabelText(/^Nueva contrase/i), 'Clave1234');
     await user.type(screen.getByLabelText(/^Confirmar nueva/i), 'Clave1234');
     await user.click(screen.getByRole('button', { name: /Cambiar contrase/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Solicita uno nuevo');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Las contraseñas no coinciden.');
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/reset-password');
   });
 
@@ -207,7 +207,7 @@ describe('CU01 — autenticación', () => {
     await user.type(screen.getByLabelText(/^Nueva contrase/i), 'Clave1234');
     await user.type(screen.getByLabelText(/^Confirmar nueva/i), 'Clave1234');
     await user.click(screen.getByRole('button', { name: /Cambiar contrase/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Solicita uno nuevo');
+    expect(await screen.findByRole('alert')).toHaveTextContent('La contraseña no cumple la política mínima definida.');
     expect(screen.getByLabelText('ruta actual')).toHaveTextContent('/reset-password');
   });
 
