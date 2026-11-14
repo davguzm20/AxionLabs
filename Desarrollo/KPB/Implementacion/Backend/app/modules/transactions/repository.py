@@ -199,7 +199,7 @@ def save_transaction_and_update_balance(
     """Inserta la transacción y actualiza el saldo del monedero en la misma sesión atómica."""
     db.add(transaction)
     wallet.current_balance += balance_delta
-    db.commit()
-    db.refresh(transaction)
-    db.refresh(wallet)
+    # El commit pertenece a persist_confirmed(), que tambiÃ©n crea las alertas.
+    # Hacerlo aquÃ­ volverÃ­a irreversible la transacciÃ³n antes de esa evaluaciÃ³n.
+    db.flush()
 
