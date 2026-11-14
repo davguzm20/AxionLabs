@@ -5,6 +5,8 @@ Rutas expuestas:
 - POST /api/v1/transactions/voice: Transcribe una nota de voz y genera vista previa (CU03 - Paso 1).
 - POST /api/v1/transactions/voice/confirm: Guarda la nota de voz revisada (CU03 - Paso 2).
 - POST /api/v1/transactions/receipt: Escanea comprobante y genera vista previa temporal (CU04 - Paso 1).
+- GET /api/v1/transactions: Lista transacciones paginadas con filtros.
+- GET /api/v1/transactions/summary: Resumen de totales agrupados por moneda.
 - PATCH /api/v1/transactions/{transaction_id}: Corrige concepto o categoría de una transacción.
 - GET /api/v1/transactions/{transaction_id}: Consulta una transacción específica.
 """
@@ -12,9 +14,10 @@ Rutas expuestas:
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from datetime import date
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -36,7 +39,9 @@ from app.modules.transactions.schemas import (
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
+    TransactionListResponse,
     TransactionOut,
+    TransactionSummaryResponse,
     VoiceConfirmRequest,
     VoicePreviewResponse,
 )
@@ -225,6 +230,71 @@ def confirm_receipt_transaction(
 # =============================================================================
 # Endpoints de consulta y corrección
 # =============================================================================
+
+
+@router.get(
+    "",
+    response_model=TransactionListResponse,
+    summary="Listar transacciones paginadas con filtros",
+)
+def list_transactions(
+    db: DbSession,
+    current: Current,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    type: Annotated[Literal["INCOME", "EXPENSE"] | None, Query()] = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: Annotated[str | None, Query(max_length=120)] = None,
+    sort: Annotated[Literal["transaction_date", "created_at"], Query()] = "transaction_date",
+    order: Annotated[Literal["asc", "desc"], Query()] = "desc",
+) -> TransactionListResponse:
+    """Retorna el historial paginado de transacciones del usuario autenticado."""
+    return service.list_transactions(
+        db=db,
+        user=current.user,
+        page=page,
+        page_size=page_size,
+        tx_type=type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+        sort=sort,
+        order=order,
+    )
+
+
+@router.get(
+    "/summary",
+    response_model=TransactionSummaryResponse,
+    summary="Resumen de totales por moneda",
+)
+def get_transactions_summary(
+    db: DbSession,
+    current: Current,
+    type: Annotated[Literal["INCOME", "EXPENSE"] | None, Query()] = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: Annotated[str | None, Query(max_length=120)] = None,
+) -> TransactionSummaryResponse:
+    """Retorna totales de ingresos, egresos y saldo neto agrupados por moneda."""
+    return service.get_transactions_summary(
+        db=db,
+        user=current.user,
+        tx_type=type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    )
+
 
 @router.patch(
     "/{transaction_id}",
