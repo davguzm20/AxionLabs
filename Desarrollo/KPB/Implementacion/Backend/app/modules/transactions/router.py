@@ -1,7 +1,10 @@
-"""Controlador FastAPI (Router) para el módulo de Transacciones (CU02).
+"""Controlador FastAPI (Router) para el módulo de Transacciones (CU02, CU03 y CU04).
 
 Rutas expuestas:
-- POST /api/v1/transactions/text: Registra una transacción procesando texto libre con IA.
+- POST /api/v1/transactions/text: Registra una transacción procesando texto libre con IA (CU02).
+- POST /api/v1/transactions/voice: Transcribe una nota de voz y genera vista previa (CU03 - Paso 1).
+- POST /api/v1/transactions/voice/confirm: Guarda la nota de voz revisada (CU03 - Paso 2).
+- POST /api/v1/transactions/receipt: Escanea comprobante y genera vista previa temporal (CU04 - Paso 1).
 - PATCH /api/v1/transactions/{transaction_id}: Corrige concepto o categoría de una transacción.
 - GET /api/v1/transactions/{transaction_id}: Consulta una transacción específica.
 """
@@ -11,19 +14,31 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Response, status
+from fastapi import APIRouter, Depends, File, Form, Header, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.database import get_db
+from app.integrations.redis.notifications import NotificationBus, get_notification_bus
+from app.integrations.redis.previews import (
+    ReceiptPreviewStore,
+    get_preview_store,
+    get_voice_preview_store,
+)
+from app.integrations.redis.rate_limit import RateLimiter, get_rate_limiter
 from app.modules.auth.deps import CurrentSession, get_current_session
 from app.modules.transactions import repository, service
+from app.modules.transactions.audio_validation import MAX_AUDIO_BYTES
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    ReceiptConfirmRequest,
+    ReceiptPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
     TransactionOut,
+    VoiceConfirmRequest,
+    VoicePreviewResponse,
 )
 
 
@@ -41,7 +56,14 @@ router = APIRouter(
 # Inyección de dependencias tipadas
 DbSession = Annotated[Session, Depends(get_db)]
 Current = Annotated[CurrentSession, Depends(get_current_session)]
+PreviewStore = Annotated[ReceiptPreviewStore, Depends(get_preview_store)]
+VoicePreviewStore = Annotated[ReceiptPreviewStore, Depends(get_voice_preview_store)]
+Bus = Annotated[NotificationBus, Depends(get_notification_bus)]
 
+
+# =============================================================================
+# Endpoints CU02: Transacción por Texto Libre
+# =============================================================================
 
 @router.post(
     "/text",
@@ -53,6 +75,7 @@ def create_transaction_from_text(
     data: TextTransactionRequest,
     db: DbSession,
     current: Current,
+    bus: Annotated[NotificationBus, Depends(get_notification_bus)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> TextTransactionResponse:
     """CU02: El usuario escribe una frase (ej: 'Gasté 15 soles en almuerzo'),
@@ -64,8 +87,144 @@ def create_transaction_from_text(
         db=db,
         user=current.user,
         data=data,
+        bus=bus,
     )
 
+
+# =============================================================================
+# Endpoints CU03: Transacción por Voz
+# =============================================================================
+
+@router.post(
+    "/voice",
+    response_model=VoicePreviewResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Transcribir nota de voz (CU03 - Paso 1: Vista Previa)",
+)
+async def create_voice_preview(
+    db: DbSession,
+    current: Current,
+    preview_store: VoicePreviewStore,
+    rate_limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+    audio: UploadFile = File(
+        ..., description="Nota de voz webm, ogg, mp4, mpeg o wav (máx. 60 s y 5 MB)."
+    ),
+    wallet_id: uuid.UUID | None = Form(None, description="Monedero sugerido (opcional)."),
+    language: str = Form("es-PE", description="Idioma del audio."),
+) -> VoicePreviewResponse:
+    """CU03 - Paso 1: transcribe y extrae los datos; no guarda nada hasta confirmar.
+
+    El audio se procesa en memoria y se descarta al terminar la petición.
+    """
+    # Un byte de más basta para saber que supera el límite sin leer todo el archivo.
+    data = await audio.read(MAX_AUDIO_BYTES + 1)
+    return service.create_voice_preview(
+        db=db,
+        user=current.user,
+        audio=data,
+        wallet_id=wallet_id,
+        language=language,
+        preview_store=preview_store,
+        rate_limiter=rate_limiter,
+    )
+
+
+@router.post(
+    "/voice/confirm",
+    response_model=TextTransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Confirmar nota de voz (CU03 - Paso 2: Confirmación)",
+)
+def confirm_voice_transaction(
+    data: VoiceConfirmRequest,
+    db: DbSession,
+    current: Current,
+    preview_store: VoicePreviewStore,
+    bus: Bus,
+    # Aceptado pero aún sin efecto: el preview de un solo uso evita duplicados.
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> TextTransactionResponse:
+    """CU03 - Paso 2: guarda los datos revisados con source = VOICE y el texto transcrito."""
+    return service.confirm_voice(
+        db=db,
+        user=current.user,
+        data=data,
+        preview_store=preview_store,
+        bus=bus,
+    )
+
+
+# =============================================================================
+# Endpoints CU04: Transacción por Foto / OCR (Paso 1: Vista Previa)
+# =============================================================================
+
+@router.post(
+    "/receipt",
+    response_model=ReceiptPreviewResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Escanear comprobante con visión OCR (CU04 - Paso 1: Vista Previa)",
+)
+async def scan_receipt_for_preview(
+    db: DbSession,
+    current: Current,
+    preview_store: PreviewStore,
+    image: UploadFile = File(
+        ...,
+        description="Foto de la boleta o factura en formato JPG o PNG (máx. 8 MB).",
+    ),
+    wallet_id: uuid.UUID | None = Form(
+        None,
+        description="ID del monedero al que se asociará la vista previa (opcional).",
+    ),
+) -> ReceiptPreviewResponse:
+    """CU04 - Paso 1: Sube una foto de un comprobante de pago.
+
+    Procesa la imagen en memoria volátil (nunca la guarda en disco), ejecuta visión OCR,
+    asigna categoría tentativa y guarda un preview temporal de 10 minutos con preview_id
+    para revisión previa del usuario.
+    """
+    file_bytes = await image.read()
+    return service.create_receipt_preview(
+        db=db,
+        user=current.user,
+        file_bytes=file_bytes,
+        filename=image.filename,
+        content_type=image.content_type,
+        wallet_id=wallet_id,
+        preview_store=preview_store,
+    )
+
+
+@router.post(
+    "/receipt/confirm",
+    response_model=TextTransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Confirmar y registrar comprobante (CU04 - Paso 2: Confirmación)",
+)
+def confirm_receipt_transaction(
+    data: ReceiptConfirmRequest,
+    db: DbSession,
+    current: Current,
+    preview_store: PreviewStore,
+    bus: Annotated[NotificationBus | None, Depends(get_notification_bus)] = None,
+) -> TextTransactionResponse:
+    """CU04 - Paso 2: Confirma los datos extraídos de la boleta o factura revisados por el usuario.
+
+    Crea la transacción en PostgreSQL con source_type = 'OCR', actualiza atómicamente
+    el saldo del monedero y elimina la vista previa temporal de Redis.
+    """
+    return service.confirm_receipt(
+        db=db,
+        user=current.user,
+        data=data,
+        preview_store=preview_store,
+        bus=bus,
+    )
+
+
+# =============================================================================
+# Endpoints de consulta y corrección
+# =============================================================================
 
 @router.patch(
     "/{transaction_id}",
@@ -127,4 +286,3 @@ def get_transaction(
         needs_review=False,
         created_at=created_str,
     )
-
