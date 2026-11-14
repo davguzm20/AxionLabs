@@ -11,6 +11,7 @@ Orquesta:
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -49,13 +50,17 @@ from app.modules.transactions.audio_validation import (
 from app.modules.transactions.image_validation import validate_and_prepare_image
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    CurrencySummary,
     ExtractedReceiptData,
+    PaginationMeta,
     ReceiptConfirmRequest,
     ReceiptPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
+    TransactionListResponse,
     TransactionOut,
+    TransactionSummaryResponse,
     VoiceConfirmRequest,
     VoicePreviewResponse,
 )
@@ -784,4 +789,145 @@ def _save_voice_transaction(
         wallet_balance=f"{wallet.current_balance:.2f}",
         alerts=alerts,
         message=f"Listo, registré {symbol} {transaction.amount:.2f} en {category.name}.",
+    )
+
+
+# =============================================================================
+# Slice 009: Consulta paginada y resumen de transacciones
+# =============================================================================
+
+_SOURCE_MAP: dict[SourceType, str] = {
+    SourceType.TEXTO: "TEXT",
+    SourceType.VOZ: "VOICE",
+    SourceType.OCR: "OCR",
+}
+
+
+def _parse_tx_type_filter(tx_type: str | None) -> TransactionType | None:
+    """Convierte el filtro de tipo de API ('INCOME'/'EXPENSE') al enum de dominio."""
+    if tx_type is None:
+        return None
+    if tx_type == "INCOME":
+        return TransactionType.INGRESO
+    if tx_type == "EXPENSE":
+        return TransactionType.GASTO
+    raise AppError(422, "INVALID_TRANSACTION_TYPE", "Tipo de transacción inválido.")
+
+
+def _to_transaction_out(transaction: Transaction) -> TransactionOut:
+    """Serializa una entidad Transaction al esquema TransactionOut."""
+    cat_name = transaction.category.name if transaction.category else "Otros"
+    tx_date_str = transaction.transacted_at.date().isoformat()
+    created_str = transaction.created_at.isoformat() if transaction.created_at else tx_date_str
+    return TransactionOut(
+        id=transaction.transaction_id,
+        type="INCOME" if transaction.type == TransactionType.INGRESO else "EXPENSE",
+        amount=f"{transaction.amount:.2f}",
+        currency=transaction.currency.value,
+        concept=transaction.concept,
+        merchant=None,
+        transaction_date=tx_date_str,
+        wallet_id=transaction.wallet_id,
+        category=CategoryInfo(
+            id=transaction.category_id,
+            name=cat_name,
+            icon="tag",
+        ),
+        source=_SOURCE_MAP.get(transaction.source_type, "TEXT"),
+        needs_review=False,
+        created_at=created_str,
+    )
+
+
+def list_transactions(
+    db: Session,
+    user: User,
+    page: int = 1,
+    page_size: int = 20,
+    tx_type: str | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+    sort: str = "transaction_date",
+    order: str = "desc",
+) -> TransactionListResponse:
+    """Retorna el historial paginado de transacciones del usuario con filtros."""
+    domain_type = _parse_tx_type_filter(tx_type)
+    rows, total = repository.list_transactions(
+        db=db,
+        user_id=user.user_id,
+        page=page,
+        page_size=page_size,
+        tx_type=domain_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+        sort=sort,
+        order=order,
+    )
+    pages = math.ceil(total / page_size) if total > 0 else 0
+    return TransactionListResponse(
+        data=[_to_transaction_out(tx) for tx in rows],
+        meta=PaginationMeta(
+            page=page,
+            page_size=page_size,
+            total=total,
+            pages=pages,
+        ),
+    )
+
+
+def get_transactions_summary(
+    db: Session,
+    user: User,
+    tx_type: str | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+) -> TransactionSummaryResponse:
+    """Calcula los totales de ingresos, egresos y saldo neto agrupados por moneda."""
+    domain_type = _parse_tx_type_filter(tx_type)
+    total_count, grouped = repository.get_transactions_summary(
+        db=db,
+        user_id=user.user_id,
+        tx_type=domain_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    )
+
+    totals_by_currency: dict[str, dict[str, Decimal]] = {}
+    for currency, row_type, amount in grouped:
+        code = currency.value
+        bucket = totals_by_currency.setdefault(
+            code, {"income": Decimal("0.00"), "expense": Decimal("0.00")}
+        )
+        if row_type == TransactionType.INGRESO:
+            bucket["income"] += amount
+        else:
+            bucket["expense"] += amount
+
+    by_currency = [
+        CurrencySummary(
+            currency=code,
+            income=f"{vals['income']:.2f}",
+            expense=f"{vals['expense']:.2f}",
+            net=f"{(vals['income'] - vals['expense']):.2f}",
+        )
+        for code, vals in totals_by_currency.items()
+    ]
+
+    return TransactionSummaryResponse(
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        count=total_count,
+        by_currency=by_currency,
     )

@@ -5,6 +5,8 @@ Rutas expuestas:
 - POST /api/v1/transactions/voice: Transcribe una nota de voz y genera vista previa (CU03 - Paso 1).
 - POST /api/v1/transactions/voice/confirm: Guarda la nota de voz revisada (CU03 - Paso 2).
 - POST /api/v1/transactions/receipt: Escanea comprobante y genera vista previa temporal (CU04 - Paso 1).
+- GET /api/v1/transactions: Lista transacciones paginadas con filtros.
+- GET /api/v1/transactions/summary: Resumen de totales agrupados por moneda.
 - PATCH /api/v1/transactions/{transaction_id}: Corrige concepto o categoría de una transacción.
 - GET /api/v1/transactions/{transaction_id}: Consulta una transacción específica.
 """
@@ -13,7 +15,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, status
@@ -21,7 +22,6 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.entities import Transaction
 from app.integrations.redis.notifications import NotificationBus, get_notification_bus
 from app.integrations.redis.previews import (
     ReceiptPreviewStore,
@@ -39,11 +39,9 @@ from app.modules.transactions.schemas import (
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
-    TransactionHistoryList,
-    TransactionHistorySummary,
+    TransactionListResponse,
     TransactionOut,
-    TransactionPageMeta,
-    CurrencySummary,
+    TransactionSummaryResponse,
     VoiceConfirmRequest,
     VoicePreviewResponse,
 )
@@ -66,29 +64,6 @@ Current = Annotated[CurrentSession, Depends(get_current_session)]
 PreviewStore = Annotated[ReceiptPreviewStore, Depends(get_preview_store)]
 VoicePreviewStore = Annotated[ReceiptPreviewStore, Depends(get_voice_preview_store)]
 Bus = Annotated[NotificationBus, Depends(get_notification_bus)]
-
-
-def _history_transaction(transaction: Transaction) -> TransactionOut:
-    """Adapta una entidad persistida al contrato del historial React."""
-    source_map = {"TEXTO": "TEXT", "VOZ": "VOICE", "OCR": "RECEIPT"}
-    category = transaction.category
-    return TransactionOut(
-        id=transaction.transaction_id,
-        type="INCOME" if transaction.type.value == "INGRESO" else "EXPENSE",
-        amount=f"{transaction.amount:.2f}",
-        currency=transaction.currency.value,
-        concept=transaction.concept,
-        transaction_date=transaction.transacted_at.date().isoformat(),
-        wallet_id=transaction.wallet_id,
-        category=CategoryInfo(
-            id=transaction.category_id,
-            name=category.name if category else "Otros",
-            icon="tag",
-        ),
-        source=source_map.get(transaction.source_type.value, "TEXT"),
-        needs_review=False,
-        created_at=transaction.created_at.isoformat(),
-    )
 
 
 # =============================================================================
@@ -256,69 +231,68 @@ def confirm_receipt_transaction(
 # Endpoints de consulta y corrección
 # =============================================================================
 
-@router.get("/summary", response_model=TransactionHistorySummary, summary="Resumir transacciones")
-def get_transaction_summary(
-    date_from: date,
-    date_to: date,
-    db: DbSession,
-    current: Current,
-    type: Literal["EXPENSE", "INCOME"] | None = None,
-    category_id: uuid.UUID | None = None,
-    wallet_id: uuid.UUID | None = None,
-    q: str | None = Query(default=None, max_length=200),
-) -> TransactionHistorySummary:
-    if date_from > date_to:
-        raise AppError(422, "INVALID_DATE_RANGE", "date_from no puede ser posterior a date_to.")
-    rows = repository.summarize_history(
-        db, current.user.user_id, date_from, date_to, type, category_id, wallet_id, q
-    )
-    _, total = repository.page_history(
-        db, current.user.user_id, date_from, date_to, 1, 1,
-        type, category_id, wallet_id, q,
-    )
-    return TransactionHistorySummary(
-        date_from=date_from.isoformat(),
-        date_to=date_to.isoformat(),
-        count=total,
-        by_currency=[
-            CurrencySummary(
-                currency=currency.value,
-                income=f"{Decimal(income):.2f}",
-                expense=f"{Decimal(expense):.2f}",
-                net=f"{Decimal(income) - Decimal(expense):.2f}",
-            )
-            for currency, income, expense in rows
-        ],
-    )
 
-
-@router.get("", response_model=TransactionHistoryList, summary="Listar transacciones")
+@router.get(
+    "",
+    response_model=TransactionListResponse,
+    summary="Listar transacciones paginadas con filtros",
+)
 def list_transactions(
-    date_from: date,
-    date_to: date,
     db: DbSession,
     current: Current,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    type: Literal["EXPENSE", "INCOME"] | None = None,
+    type: Annotated[Literal["INCOME", "EXPENSE"] | None, Query()] = None,
     category_id: uuid.UUID | None = None,
     wallet_id: uuid.UUID | None = None,
-    q: str | None = Query(default=None, max_length=200),
-) -> TransactionHistoryList:
-    if date_from > date_to:
-        raise AppError(422, "INVALID_DATE_RANGE", "date_from no puede ser posterior a date_to.")
-    transactions, total = repository.page_history(
-        db, current.user.user_id, date_from, date_to, page, page_size,
-        type, category_id, wallet_id, q,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: Annotated[str | None, Query(max_length=120)] = None,
+    sort: Annotated[Literal["transaction_date", "created_at"], Query()] = "transaction_date",
+    order: Annotated[Literal["asc", "desc"], Query()] = "desc",
+) -> TransactionListResponse:
+    """Retorna el historial paginado de transacciones del usuario autenticado."""
+    return service.list_transactions(
+        db=db,
+        user=current.user,
+        page=page,
+        page_size=page_size,
+        tx_type=type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+        sort=sort,
+        order=order,
     )
-    return TransactionHistoryList(
-        data=[_history_transaction(transaction) for transaction in transactions],
-        meta=TransactionPageMeta(
-            page=page,
-            page_size=page_size,
-            total=total,
-            pages=(total + page_size - 1) // page_size,
-        ),
+
+
+@router.get(
+    "/summary",
+    response_model=TransactionSummaryResponse,
+    summary="Resumen de totales por moneda",
+)
+def get_transactions_summary(
+    db: DbSession,
+    current: Current,
+    type: Annotated[Literal["INCOME", "EXPENSE"] | None, Query()] = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: Annotated[str | None, Query(max_length=120)] = None,
+) -> TransactionSummaryResponse:
+    """Retorna totales de ingresos, egresos y saldo neto agrupados por moneda."""
+    return service.get_transactions_summary(
+        db=db,
+        user=current.user,
+        tx_type=type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
     )
 
 

@@ -6,14 +6,16 @@ Realiza las consultas a PostgreSQL sobre las tablas wallets, categories y transa
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import Date, case, cast, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.entities import Category, Transaction, TransactionType, Wallet
+from app.entities import Category, Currency, Transaction, TransactionType, Wallet
+
+LIMA_TZ = ZoneInfo("America/Lima")
 
 
 def get_wallet(
@@ -105,101 +107,133 @@ def get_transaction_by_id(
     return db.execute(stmt).scalars().first()
 
 
-def _history_filters(
-    user_id: uuid.UUID,
-    date_from: date,
-    date_to: date,
-    transaction_type: Literal["EXPENSE", "INCOME"] | None = None,
-    category_id: uuid.UUID | None = None,
-    wallet_id: uuid.UUID | None = None,
-    q: str | None = None,
-) -> list[object]:
-    filters: list[object] = [
-        Transaction.user_id == user_id,
-        cast(Transaction.transacted_at, Date) >= date_from,
-        cast(Transaction.transacted_at, Date) <= date_to,
-    ]
-    if transaction_type is not None:
-        filters.append(
-            Transaction.type
-            == (TransactionType.INGRESO if transaction_type == "INCOME" else TransactionType.GASTO)
-        )
-    if category_id is not None:
-        filters.append(Transaction.category_id == category_id)
-    if wallet_id is not None:
-        filters.append(Transaction.wallet_id == wallet_id)
-    if q:
-        filters.append(Transaction.concept.ilike(f"%{q}%"))
-    return filters
-
-
-def page_history(
-    db: Session,
-    user_id: uuid.UUID,
-    date_from: date,
-    date_to: date,
-    page: int,
-    page_size: int,
-    transaction_type: Literal["EXPENSE", "INCOME"] | None = None,
-    category_id: uuid.UUID | None = None,
-    wallet_id: uuid.UUID | None = None,
-    q: str | None = None,
-) -> tuple[list[Transaction], int]:
-    filters = _history_filters(
-        user_id, date_from, date_to, transaction_type, category_id, wallet_id, q
-    )
-    total = db.execute(
-        select(func.count()).select_from(Transaction).where(*filters)
-    ).scalar_one()
-    statement = (
-        select(Transaction)
-        .options(joinedload(Transaction.category))
-        .where(*filters)
-        .order_by(Transaction.transacted_at.desc(), Transaction.transaction_id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    return list(db.execute(statement).scalars().all()), total
-
-
-def summarize_history(
-    db: Session,
-    user_id: uuid.UUID,
-    date_from: date,
-    date_to: date,
-    transaction_type: Literal["EXPENSE", "INCOME"] | None = None,
-    category_id: uuid.UUID | None = None,
-    wallet_id: uuid.UUID | None = None,
-    q: str | None = None,
-) -> list[tuple[object, Decimal, Decimal]]:
-    filters = _history_filters(
-        user_id, date_from, date_to, transaction_type, category_id, wallet_id, q
-    )
-    income = func.coalesce(
-        func.sum(case((Transaction.type == TransactionType.INGRESO, Transaction.amount), else_=0)), 0
-    )
-    expense = func.coalesce(
-        func.sum(case((Transaction.type == TransactionType.GASTO, Transaction.amount), else_=0)), 0
-    )
-    statement = (
-        select(Transaction.currency, income, expense)
-        .where(*filters)
-        .group_by(Transaction.currency)
-        .order_by(Transaction.currency)
-    )
-    return list(db.execute(statement).all())
-
-
 def save_transaction_and_update_balance(
     db: Session,
     transaction: Transaction,
     wallet: Wallet,
     balance_delta: Decimal,
 ) -> None:
-    """Inserta la transacción y actualiza el saldo del monedero en la misma sesión atómica."""
+    """Inserta la transacción y actualiza el saldo sin confirmar.
+
+    El servicio hace el commit después de evaluar las alertas del CU08, para que todo
+    ocurra en una sola transacción de BD.
+    """
     db.add(transaction)
     wallet.current_balance += balance_delta
-    # El commit pertenece a persist_confirmed(), que tambiÃ©n crea las alertas.
-    # Hacerlo aquÃ­ volverÃ­a irreversible la transacciÃ³n antes de esa evaluaciÃ³n.
     db.flush()
+
+
+def _apply_transaction_filters(
+    stmt,
+    user_id: uuid.UUID,
+    tx_type: TransactionType | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+):
+    """Aplica filtros comunes de usuario, tipo, categoría, monedero, fechas y búsqueda."""
+    stmt = stmt.where(Transaction.user_id == user_id)
+
+    if tx_type is not None:
+        stmt = stmt.where(Transaction.type == tx_type)
+    if category_id is not None:
+        stmt = stmt.where(Transaction.category_id == category_id)
+    if wallet_id is not None:
+        stmt = stmt.where(Transaction.wallet_id == wallet_id)
+    if date_from is not None:
+        start_dt = datetime(
+            date_from.year, date_from.month, date_from.day, 0, 0, 0, tzinfo=LIMA_TZ
+        )
+        stmt = stmt.where(Transaction.transacted_at >= start_dt)
+    if date_to is not None:
+        end_dt = datetime(
+            date_to.year, date_to.month, date_to.day, 23, 59, 59, 999999, tzinfo=LIMA_TZ
+        )
+        stmt = stmt.where(Transaction.transacted_at <= end_dt)
+    if q:
+        clean_q = q.strip()
+        if clean_q:
+            stmt = stmt.where(Transaction.concept.ilike(f"%{clean_q}%"))
+
+    return stmt
+
+
+def list_transactions(
+    db: Session,
+    user_id: uuid.UUID,
+    page: int,
+    page_size: int,
+    tx_type: TransactionType | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+    sort: str = "transaction_date",
+    order: str = "desc",
+) -> tuple[list[Transaction], int]:
+    """Retorna una página de transacciones filtradas junto con el total de coincidencias."""
+    count_stmt = _apply_transaction_filters(
+        select(func.count()).select_from(Transaction),
+        user_id=user_id,
+        tx_type=tx_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    )
+    total = int(db.scalar(count_stmt) or 0)
+
+    sort_col = Transaction.created_at if sort == "created_at" else Transaction.transacted_at
+    order_expr = sort_col.asc() if order == "asc" else sort_col.desc()
+
+    data_stmt = _apply_transaction_filters(
+        select(Transaction).options(joinedload(Transaction.category)),
+        user_id=user_id,
+        tx_type=tx_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    ).order_by(order_expr, Transaction.created_at.desc())
+
+    rows = list(db.scalars(data_stmt.offset((page - 1) * page_size).limit(page_size)).all())
+    return rows, total
+
+
+def get_transactions_summary(
+    db: Session,
+    user_id: uuid.UUID,
+    tx_type: TransactionType | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+) -> tuple[int, list[tuple[Currency, TransactionType, Decimal]]]:
+    """Agrupa conteo y suma de montos por moneda y tipo según los filtros indicados."""
+    stmt = _apply_transaction_filters(
+        select(
+            Transaction.currency,
+            Transaction.type,
+            func.count(Transaction.transaction_id),
+            func.coalesce(func.sum(Transaction.amount), 0),
+        ),
+        user_id=user_id,
+        tx_type=tx_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    ).group_by(Transaction.currency, Transaction.type)
+
+    rows = db.execute(stmt).all()
+    total_count = sum(int(row[2]) for row in rows)
+    grouped = [(row[0], row[1], Decimal(row[3])) for row in rows]
+    return total_count, grouped
 

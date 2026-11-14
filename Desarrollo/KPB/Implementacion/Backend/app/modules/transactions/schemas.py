@@ -192,3 +192,41 @@ class VoiceConfirmRequest(BaseModel):
     transaction_date: date
     category_id: uuid.UUID
     wallet_id: uuid.UUID
+
+
+# =============================================================================
+# Schemas de consulta paginada y resumen de totales
+# =============================================================================
+
+class PaginationMeta(BaseModel):
+    """Metadatos de paginación para listados."""
+
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class TransactionListResponse(BaseModel):
+    """Respuesta HTTP 200 de GET /transactions con historial paginado."""
+
+    data: list[TransactionOut]
+    meta: PaginationMeta
+
+
+class CurrencySummary(BaseModel):
+    """Totales de ingresos, egresos y saldo neto en una moneda específica."""
+
+    currency: str
+    income: str
+    expense: str
+    net: str
+
+
+class TransactionSummaryResponse(BaseModel):
+    """Respuesta HTTP 200 de GET /transactions/summary con totales por moneda."""
+
+    date_from: str | None = None
+    date_to: str | None = None
+    count: int
+    by_currency: list[CurrencySummary]
