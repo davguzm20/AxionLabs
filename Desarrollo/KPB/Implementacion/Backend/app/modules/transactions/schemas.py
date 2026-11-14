@@ -11,8 +11,6 @@ from __future__ import annotations
 import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.alerts.schemas import AlertOut
-
 
 class TextTransactionRequest(BaseModel):
     """Payload para registrar una transacción a partir de texto libre."""
@@ -85,6 +83,6 @@ class TextTransactionResponse(BaseModel):
 
     transaction: TransactionOut
     wallet_balance: str  # Nuevo saldo del monedero (puede ser negativo: "-15.00")
-    alerts: list[AlertOut] = Field(default_factory=list, description="Alertas emitidas si cruza presupuestos")
+    alerts: list[dict] = Field(default_factory=list, description="Alertas emitidas si cruza presupuestos")
     message: str  # Mensaje amigable de confirmación para el chat
 

@@ -39,7 +39,7 @@ export interface HistoryFilters {
 
 export interface HistoryListResponse {
   data: HistoryTransaction[];
-  pagination: { page: number; page_size: number; total_items: number; total_pages: number };
+  meta: { page: number; page_size: number; total: number; pages: number };
 }
 
 export interface HistorySummaryResponse {

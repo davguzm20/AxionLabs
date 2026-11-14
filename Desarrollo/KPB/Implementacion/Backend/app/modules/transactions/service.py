@@ -15,7 +15,6 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -30,8 +29,6 @@ from app.entities import (
     Wallet,
 )
 from app.integrations.ai.extractor import extract_transaction_from_text
-from app.integrations.redis.notifications import NotificationBus
-from app.modules.alerts import service as alerts_service
 from app.modules.transactions import repository
 from app.modules.transactions.schemas import (
     CategoryInfo,
@@ -68,7 +65,6 @@ def create_from_text(
     db: Session,
     user: User,
     data: TextTransactionRequest,
-    bus: NotificationBus | None = None,
 ) -> TextTransactionResponse:
     """Ejecuta el flujo completo del CU02 a partir del texto ingresado por el usuario."""
     # 1. Validar longitud del texto de entrada
@@ -163,26 +159,13 @@ def create_from_text(
         source_type=SourceType.TEXTO,
     )
 
-    # 10. Persistir, actualizar saldo y evaluar alertas (CU08) en una sola transacción de BD
-    try:
-        repository.save_transaction_and_update_balance(
-            db=db,
-            transaction=transaction,
-            wallet=wallet,
-            balance_delta=balance_delta,
-        )
-        alerts = alerts_service.evaluate_expense(db, transaction)
-        db.commit()
-    except SQLAlchemyError as error:
-        db.rollback()
-        # Solo el tipo: el mensaje de SQLAlchemy incluye los montos de la consulta.
-        logger.error("No se pudo registrar el gasto: %s", type(error).__name__)
-        raise AppError(500, "INTERNAL_ERROR", "Ocurrió un error. Intenta de nuevo.") from None
-    db.refresh(transaction)
-    db.refresh(wallet)
-
-    if bus is not None:
-        alerts_service.publish_alerts(bus, user.user_id, alerts)
+    # 10. Persistir y actualizar saldo atómicamente
+    repository.save_transaction_and_update_balance(
+        db=db,
+        transaction=transaction,
+        wallet=wallet,
+        balance_delta=balance_delta,
+    )
 
     # 11. Armar respuesta según contrato OpenAPI
     symbol = _get_currency_symbol(wallet.currency)
@@ -216,7 +199,7 @@ def create_from_text(
             created_at=created_at_iso,
         ),
         wallet_balance=formatted_balance,
-        alerts=alerts,
+        alerts=[],  # Slice 004 no emite alertas (se integran en Slice 008)
         message=message,
     )
 
