@@ -68,7 +68,6 @@ def list_categories(
     db: DbSession,
     current: Current,
     type: Literal["EXPENSE", "INCOME"] | None = None,
-    include_system: bool = True,
     status: Literal["ACTIVE", "INACTIVE"] | None = None,
 ) -> CategoryList:
     """Lista las categorías del usuario autenticado y las categorías del sistema."""
@@ -76,7 +75,7 @@ def list_categories(
         db=db,
         user=current.user,
         category_type=type,
-        include_system=include_system,
+        include_system=False,
         status_filter=status,
     )
     return CategoryList(data=items)

@@ -36,7 +36,9 @@ from app.modules.budgets.schemas import (
     BudgetImpact,
     BudgetOut,
     BudgetUpdate,
+    BudgetWithoutCapOut,
 )
+from app.modules.categories import repository as categories_repository
 
 MAX_AMOUNT = Decimal("99999999.99")
 CATEGORY_ICON = "tag"  # La tabla categories aun no guarda iconos (igual que CU02).
@@ -145,22 +147,47 @@ def _detail(db: Session, budget: Budget) -> BudgetOut:
     return _to_out(db, budget, alerts_service.active_thresholds_out(db, budget), today_lima())
 
 
+def _without_cap(category) -> BudgetWithoutCapOut:
+    """Representación de una categoría que no tiene presupuesto vigente."""
+    return BudgetWithoutCapOut(
+        category=BudgetCategory(
+            id=category.category_id,
+            name=category.name,
+            icon=CATEGORY_ICON,
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Casos de uso
 # ---------------------------------------------------------------------------
 def list_budgets(
     db: Session, user: User, status: str | None, category_id: uuid.UUID | None
-) -> list[BudgetOut]:
+) -> list[BudgetOut | BudgetWithoutCapOut]:
     """Umbrales y alertas se leen en bloque; el consumo, uno por presupuesto (CP-PRE-20)."""
     db_status = next((k for k, v in API_STATUS.items() if v == status), None)
-    budgets = repository.list_budgets(db, user.user_id, db_status, category_id)
+    # También cubre cuentas creadas antes de que el alta sembrara su catálogo.
+    # Es el mismo mecanismo de compatibilidad que usa GET /categories.
+    if db_status != BudgetStatus.INACTIVO and categories_repository.ensure_default_categories(
+        db, user.user_id
+    ):
+        db.commit()
+
+    if db_status != BudgetStatus.INACTIVO:
+        category_budgets = repository.list_categories_with_active_budget(
+            db, user.user_id, category_id
+        )
+        budgets = [budget for _, budget in category_budgets if budget is not None]
+    else:
+        category_budgets = []
+        budgets = repository.list_budgets(db, user.user_id, db_status, category_id)
     today = today_lima()
     ids = [b.budget_id for b in budgets]
     thresholds = alerts_repository.thresholds_of_many(db, ids)
     issued = alerts_repository.issued_in_periods(
         db, {b.budget_id: current_period(b, today)[0] for b in budgets}
     )
-    return [
+    result: list[BudgetOut | BudgetWithoutCapOut] = [
         _to_out(
             db,
             budget,
@@ -176,6 +203,13 @@ def list_budgets(
         )
         for budget in budgets
     ]
+    if db_status != BudgetStatus.INACTIVO:
+        rendered = {budget.budget_id: item for budget, item in zip(budgets, result)}
+        return [
+            _without_cap(category) if budget is None else rendered[budget.budget_id]
+            for category, budget in category_budgets
+        ]
+    return result
 
 
 def get_budget(db: Session, user: User, budget_id: uuid.UUID) -> BudgetOut:
@@ -214,6 +248,10 @@ def create_budget(db: Session, user: User, data: BudgetCreate) -> BudgetOut:
     )
     budget.category = category
     db.add(budget)
+    # BudgetThreshold solo guarda budget_id y no tiene una relación ORM que
+    # fuerce el orden de INSERT. Flush persiste el padre en esta misma
+    # transacción antes de insertar los umbrales con clave foránea.
+    db.flush()
     for percentage in sorted(percentages):
         db.add(
             BudgetThreshold(

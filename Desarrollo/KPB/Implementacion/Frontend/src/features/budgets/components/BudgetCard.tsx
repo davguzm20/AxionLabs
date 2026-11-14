@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { formatMoney } from '../utils/money';
-import type { Budget } from '../types/budget.types';
+import type { Budget, BudgetListItem, Category } from '../types/budget.types';
 
 const categoryIcons: Record<string, LucideIcon> = {
   alimentación: Utensils,
@@ -28,10 +28,11 @@ const categoryIcons: Record<string, LucideIcon> = {
 };
 
 interface BudgetCardProps {
-  budget: Budget;
+  budget: BudgetListItem;
   onEdit: (budget: Budget) => void;
   onDeactivate: (budget: Budget) => void;
   onReactivate: (budget: Budget) => void;
+  onSetLimit: (category: Category) => void;
   busy?: boolean;
 }
 
@@ -58,8 +59,34 @@ function getProgressState(percentage: number): { label: string; color: string } 
   return { label: 'Vas bien', color: 'bg-brand-500' };
 }
 
-export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, busy = false }: BudgetCardProps) {
+export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, onSetLimit, busy = false }: BudgetCardProps) {
   const Icon = categoryIcons[budget.category.name.toLocaleLowerCase('es-PE')] ?? CircleHelp;
+  if (budget.id === null) {
+    return (
+      <article aria-labelledby={`budget-${budget.category.id}-title`} className="rounded-xl border border-ink-300 bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Icon aria-hidden="true" size={20} className="shrink-0 text-ink-700" />
+            <div className="min-w-0">
+              <h2 id={`budget-${budget.category.id}-title`} className="truncate text-base font-semibold text-ink-900">
+                {budget.category.name}
+              </h2>
+              <p className="text-xs text-ink-500">Sin tope configurado</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSetLimit(budget.category)}
+            className="min-h-11 rounded-md px-2 text-sm font-medium text-accent-600 underline hover:text-accent-500"
+          >
+            Establecer tope
+          </button>
+        </div>
+        <p className="mt-4 text-sm font-medium text-ink-500">0.0% · Sin tope</p>
+        <div className="mt-2 h-2 rounded-full bg-ink-300/50" aria-label={`Sin tope para ${budget.category.name}`} />
+      </article>
+    );
+  }
   const percentage = Math.max(0, budget.percentage);
   const state = getProgressState(percentage);
   const isInactive = budget.status === 'INACTIVE';

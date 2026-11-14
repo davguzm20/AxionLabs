@@ -52,8 +52,8 @@ export function ConfirmationCard({ transaction, walletName, status, isAccepting 
     setLoadingCategories(true);
     setError(null);
     try {
-      const data = await getCategories();
-      setCategories(data.filter((category) => category.type === currentTransaction.type));
+      const data = await getCategories(undefined, currentTransaction.type);
+      setCategories(data);
     } catch {
       setError('No se pudieron cargar las categorías. Inténtalo nuevamente.');
     } finally {

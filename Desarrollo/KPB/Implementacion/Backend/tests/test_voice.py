@@ -86,6 +86,8 @@ def scenario(db):
     wallet = make_wallet(db, user)
     food = make_category(db, "Alimentación")
     others = make_category(db, "Otros")
+    food.user_id = user.user_id
+    others.user_id = user.user_id
     db.commit()
     return user, wallet, food, others
 

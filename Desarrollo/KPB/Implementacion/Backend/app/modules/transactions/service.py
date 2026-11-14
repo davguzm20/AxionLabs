@@ -195,7 +195,7 @@ def create_from_text(
         category = repository.get_category_by_name(db, user.user_id, extracted.concept)
 
     if category is None or extracted.confidence < 0.60:
-        category = repository.get_fallback_category(db)
+        category = repository.get_fallback_category(db, user.user_id)
         needs_review = True
 
     # 8. Determinar tipo y delta para el saldo del monedero
@@ -381,7 +381,7 @@ def create_receipt_preview(
         category = repository.get_category_by_name(db, user.user_id, search_term)
 
     if category is None:
-        category = repository.get_fallback_category(db)
+        category = repository.get_fallback_category(db, user.user_id)
 
     # 5. Generar preview_id temporal
     preview_id = uuid.uuid4()

@@ -4,7 +4,18 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.entities import AccessLog, AccessStatus, Currency, User, Wallet, WalletType
+from app.entities import AccessLog, AccessStatus, Category, Currency, User, Wallet, WalletType
+
+DEFAULT_CATEGORY_NAMES = (
+    "Alimentación",
+    "Transporte",
+    "Servicios",
+    "Salud",
+    "Ocio",
+    "Otros",
+    "Sueldo",
+    "Inversiones",
+)
 
 
 def get_user_by_email(db: Session, email: str) -> User | None:
@@ -32,6 +43,9 @@ def add_user_with_wallet(
             initial_balance=Decimal("0.00"),
             current_balance=Decimal("0.00"),
         )
+    )
+    db.add_all(
+        [Category(user_id=user.user_id, name=name) for name in DEFAULT_CATEGORY_NAMES]
     )
     return user
 

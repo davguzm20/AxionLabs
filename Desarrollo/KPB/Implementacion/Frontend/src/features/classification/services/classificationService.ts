@@ -1,3 +1,4 @@
+import { api } from '../../../lib/api';
 import type {
   CategoriesResponse,
   Category,
@@ -5,9 +6,7 @@ import type {
   ClassificationResponse,
 } from '../types/classification.types';
 
-const API_BASE = '/api/v1';
-
-async function parseResponse<T>(response: Response): Promise<T> {
+export async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     throw new Error('No se pudo obtener la clasificación. Inténtalo nuevamente.');
   }
@@ -15,9 +14,12 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function getCategories(signal?: AbortSignal): Promise<CategoriesResponse> {
-  const response = await fetch(`${API_BASE}/categories`, { signal });
-  const payload = await parseResponse<unknown>(response);
+export async function getCategories(
+  signal?: AbortSignal,
+  type?: Category['type'],
+): Promise<CategoriesResponse> {
+  const query = type ? `?type=${encodeURIComponent(type)}` : '';
+  const payload = await api<unknown>(`/categories${query}`, { signal });
   const categories = Array.isArray(payload)
     ? payload
     : typeof payload === 'object' && payload !== null && Array.isArray((payload as { data?: unknown }).data)
@@ -36,13 +38,12 @@ export async function classifyTransaction(
   request: ClassificationRequest,
   signal?: AbortSignal,
 ): Promise<ClassificationResponse> {
-  const response = await fetch(`${API_BASE}/categories/suggest`, {
+  return api<ClassificationResponse>('/categories/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
     signal,
   });
-  return parseResponse<ClassificationResponse>(response);
 }
 
 export function getFallbackCategory(categories: Category[]): Category {

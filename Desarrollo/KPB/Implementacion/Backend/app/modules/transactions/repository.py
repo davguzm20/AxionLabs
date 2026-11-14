@@ -53,7 +53,7 @@ def get_category_by_name(
     stmt = (
         select(Category)
         .where(
-            (Category.user_id == user_id) | (Category.user_id.is_(None)),
+            Category.user_id == user_id,
             func.lower(Category.name) == clean_name.lower(),
         )
         .order_by(Category.user_id.desc().nullslast())  # Priorizar categorías del usuario
@@ -61,10 +61,10 @@ def get_category_by_name(
     return db.execute(stmt).scalars().first()
 
 
-def get_fallback_category(db: Session) -> Category:
+def get_fallback_category(db: Session, user_id: uuid.UUID) -> Category:
     """Obtiene la categoría fallback 'Otros'. Si no existiera en la BD, la crea."""
     stmt = select(Category).where(
-        Category.user_id.is_(None),
+        Category.user_id == user_id,
         func.lower(Category.name) == "otros",
     )
     category = db.execute(stmt).scalars().first()
@@ -73,6 +73,7 @@ def get_fallback_category(db: Session) -> Category:
 
     # En caso de que el seed no se haya corrido aún, creamos una categoría fallback básica
     fallback = Category(
+        user_id=user_id,
         name="Otros",
         description="Categoría por defecto para gastos sin clasificar",
     )
@@ -89,7 +90,7 @@ def get_category_by_id(
     """Obtiene una categoría por su ID, verificando que pertenezca al usuario o sea del sistema."""
     stmt = select(Category).where(
         Category.category_id == category_id,
-        (Category.user_id == user_id) | (Category.user_id.is_(None)),
+        Category.user_id == user_id,
     )
     return db.execute(stmt).scalars().first()
 

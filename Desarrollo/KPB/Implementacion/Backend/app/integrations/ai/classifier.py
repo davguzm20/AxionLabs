@@ -15,6 +15,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
+from unicodedata import normalize
 
 from app.config import get_ai_settings
 from app.core.errors import AppError
@@ -269,12 +270,17 @@ class CategoryClassifier:
         candidates: list[dict[str, Any]],
     ) -> ClassificationResult:
         """Aplica análisis semántico por expresiones regulares sobre el texto."""
-        full_text = f"{concept} {merchant or ''}".lower()
+        # "menú" y "menu" deben coincidir con las mismas reglas.
+        full_text = normalize("NFKD", f"{concept} {merchant or ''}").encode(
+            "ascii", "ignore"
+        ).decode().lower()
         norm_type = category_type.strip().upper()
 
         # Mapa de candidatos por nombre en minúsculas
         cand_by_name: dict[str, dict[str, Any]] = {
-            c["name"].strip().lower(): c for c in candidates
+            c["name"].strip().lower(): c
+            for c in candidates
+            if str(c.get("type", "")).upper() == norm_type
         }
 
         # Evaluamos las reglas heurísticas

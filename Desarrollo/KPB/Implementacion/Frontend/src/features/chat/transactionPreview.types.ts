@@ -6,6 +6,23 @@ export type CategoryChoice = {
   icon?: string;
   type?: TransactionType;
   status?: string;
+  source?: string;
+};
+
+export type ApiCategoryChoice = CategoryChoice;
+
+export type BudgetAlert = {
+  message: string;
+  notification_id?: string;
+  category?: { id: string; name: string };
+  priority?: 'normal' | 'high' | string;
+  threshold_percentage?: number;
+  usage_percentage?: number;
+  remaining?: string;
+};
+
+export type LegacyBudgetAlert = BudgetAlert & {
+  severity?: 'warning' | 'danger';
 };
 
 export type WalletChoice = {
@@ -60,5 +77,28 @@ export type SavedTransactionResponse = {
     category: CategoryChoice;
   };
   wallet_name?: string;
-  alerts?: Array<{ message: string; severity: 'warning' | 'danger' }>;
+  alerts: LegacyBudgetAlert[];
+  budget_alert?: BudgetAlert | null;
+};
+
+export type Api10SavedTransaction = {
+  id: string;
+  type: 'expense' | 'income';
+  amount: string;
+  currency: string;
+  concept: string;
+  occurred_at: string;
+  source?: string;
+  wallet: { id: string; name: string };
+  category: CategoryChoice;
+};
+
+export type Api10SavedTransactionResponse = {
+  transaction: Api10SavedTransaction;
+  confirmation_message?: string;
+  balances?: {
+    wallet: { id: string; balance: string };
+    category: { id: string; spent_month: string };
+  };
+  budget_alert: BudgetAlert | null;
 };

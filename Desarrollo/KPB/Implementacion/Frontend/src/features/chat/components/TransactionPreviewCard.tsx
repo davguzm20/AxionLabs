@@ -80,7 +80,7 @@ export function TransactionPreviewCard({
       if (!active) return;
       const categoryItems: CategoryChoice[] = responseItems(categoryResponse).map((category) => ({
         ...category,
-        type: category.type.toUpperCase() as CategoryChoice['type'],
+        type: (category.type ?? 'EXPENSE').toUpperCase() as CategoryChoice['type'],
         icon: 'circle-help',
       }));
       const walletItems = responseItems(walletResponse);

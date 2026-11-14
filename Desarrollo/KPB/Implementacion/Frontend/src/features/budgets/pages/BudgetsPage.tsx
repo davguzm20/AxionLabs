@@ -151,12 +151,13 @@ export function BudgetsPage() {
           <section aria-label="Lista de presupuestos" className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {budgets.map((budget) => (
               <BudgetCard
-                key={budget.id}
+                key={budget.id ?? budget.category.id}
                 budget={budget}
                 busy={busy}
                 onEdit={(item) => navigate(`/presupuestos/${encodeURIComponent(item.id)}/editar`)}
                 onDeactivate={(item) => void handleDeactivate(item)}
                 onReactivate={(item) => void handleReactivate(item)}
+                onSetLimit={(category) => navigate(`/presupuestos/nuevo?category_id=${encodeURIComponent(category.id)}`)}
               />
             ))}
           </section>

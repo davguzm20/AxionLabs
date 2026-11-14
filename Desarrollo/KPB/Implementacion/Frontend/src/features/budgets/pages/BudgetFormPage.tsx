@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { ArrowLeft, Bell, ChevronDown, Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { ApiError } from '../../../lib/errors';
 import { useBudgetDetails, useBudgets } from '../hooks/useBudgets';
@@ -66,6 +66,7 @@ function centsToDecimal(cents: bigint): string {
 export function BudgetFormPage() {
   const navigate = useNavigate();
   const { budgetId } = useParams();
+  const [searchParams] = useSearchParams();
   const isEditing = Boolean(budgetId);
   const budgetQuery = useBudgetDetails(budgetId);
   const {
@@ -89,7 +90,10 @@ export function BudgetFormPage() {
     formState: { errors, isDirty },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues,
+    defaultValues: {
+      ...defaultValues,
+      category_id: isEditing ? '' : searchParams.get('category_id') ?? '',
+    },
   });
 
   useEffect(() => {
