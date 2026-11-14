@@ -53,6 +53,21 @@ describe('parseNotificationFrames', () => {
     expect(statuses).toEqual(['connecting', 'connected', 'disconnected']);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it('stops silently when SSE is unavailable', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statuses: NotificationStreamStatus[] = [];
+    await consumeNotificationStream(
+      new AbortController().signal,
+      vi.fn(),
+      (status) => statuses.push(status),
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(statuses).toEqual(['connecting', 'disconnected']);
+  });
 });
 
 afterEach(() => vi.unstubAllGlobals());

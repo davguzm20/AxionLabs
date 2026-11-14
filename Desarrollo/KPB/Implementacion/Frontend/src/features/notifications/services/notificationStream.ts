@@ -56,6 +56,10 @@ export async function consumeNotificationStream(
         cache: 'no-store',
         signal,
       });
+      if (response.status === 503) {
+        onStatus('disconnected');
+        return;
+      }
       if (!response.ok || !response.body) throw new Error('No se pudo abrir el canal de notificaciones.');
 
       onStatus('connected');
