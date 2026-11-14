@@ -17,7 +17,19 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 export async function getCategories(signal?: AbortSignal): Promise<CategoriesResponse> {
   const response = await fetch(`${API_BASE}/categories`, { signal });
-  return parseResponse<CategoriesResponse>(response);
+  const payload = await parseResponse<unknown>(response);
+  const categories = Array.isArray(payload)
+    ? payload
+    : typeof payload === 'object' && payload !== null && Array.isArray((payload as { data?: unknown }).data)
+      ? (payload as { data: unknown[] }).data
+      : null;
+
+  if (!categories) throw new Error('La respuesta de categorías no es válida.');
+
+  return categories.map((item) => {
+    const category = item as Category;
+    return { ...category, type: String(category.type).toUpperCase() as Category['type'] };
+  });
 }
 
 export async function classifyTransaction(

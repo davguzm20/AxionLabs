@@ -478,9 +478,9 @@ function findSuggestedCategory(type: TransactionType, concept: string): MockCate
 
 export const handlers = [
   http.get('*/health', () => HttpResponse.json({ status: 'ok' })),
-  http.get('*/api/v1/categories', () => HttpResponse.json({
-    data: categoryCatalog.map(({ id, name, type }) => ({ id, name, type: type.toLowerCase() })),
-  })),
+  http.get('*/api/v1/categories', () => HttpResponse.json(
+    categoryCatalog.map(({ id, name, type, icon }) => ({ id, name, type, icon })),
+  )),
   http.get('*/transactions/summary', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     const query = new URL(request.url).searchParams;
