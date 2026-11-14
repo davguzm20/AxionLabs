@@ -9,12 +9,8 @@ from app.entities import AccessLog, AccessStatus, Category, Currency, User, Wall
 DEFAULT_CATEGORY_NAMES = (
     "Alimentación",
     "Transporte",
-    "Servicios",
     "Salud",
-    "Ocio",
     "Otros",
-    "Sueldo",
-    "Inversiones",
 )
 
 

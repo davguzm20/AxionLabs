@@ -11,6 +11,7 @@ Orquesta:
 from __future__ import annotations
 
 import logging
+import re
 import math
 import uuid
 from datetime import date, datetime, timedelta
@@ -55,6 +56,7 @@ from app.modules.transactions.schemas import (
     PaginationMeta,
     ReceiptConfirmRequest,
     ReceiptPreviewResponse,
+    TextPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
@@ -91,6 +93,80 @@ def _validate_transaction_date(tx_date: date) -> None:
 # =============================================================================
 # CU02: Registro de Transacción por Texto Libre
 # =============================================================================
+
+_PURE_GREETING_RE = re.compile(
+    r"^\s*[!¡.,?]*\s*(?:hola|holi|hey|buenas(?:\s+tardes|\s+noches)?|buen(?:os|as)\s+d[ií]as|qué\s+tal|que\s+tal)\s*[!¡.,?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _reject_non_transaction_text(text: str) -> None:
+    """Detiene saludos antes de invocar extracción/clasificación financiera."""
+    if _PURE_GREETING_RE.fullmatch(text):
+        raise AppError(
+            422,
+            "GREETING_ONLY",
+            "¡Hola! Soy KhipuBot. ¿Qué gasto o ingreso quieres registrar hoy?",
+        )
+
+def create_text_preview(
+    db: Session,
+    user: User,
+    data: TextTransactionRequest,
+) -> TextPreviewResponse:
+    """Extrae y clasifica texto sin crear una transacción ni tocar saldos."""
+    raw_text = data.text.strip()
+    if not (1 <= len(raw_text) <= 500):
+        raise AppError(422, "VALIDATION_ERROR", "El texto debe tener entre 1 y 500 caracteres.")
+    _reject_non_transaction_text(raw_text)
+
+    wallet = repository.get_wallet(db, user.user_id, data.wallet_id)
+    if wallet is None:
+        raise AppError(409, "NO_ACTIVE_WALLET", "Crea un monedero antes de registrar una transacción.")
+
+    extracted = extract_transaction_from_text(
+        text=raw_text,
+        client_timezone=data.client_timezone,
+        default_currency=wallet.currency.value,
+    )
+    if extracted.amount is None or extracted.amount <= Decimal("0.00"):
+        raise AppError(
+            422,
+            "AMOUNT_NOT_DETECTED",
+            "No pude identificar el monto. ¿Cuánto fue el gasto o ingreso?",
+            details=[{"field": "amount", "message": "El monto es obligatorio."}],
+        )
+    tx_type = "INCOME" if extracted.type == "INCOME" else "EXPENSE"
+    concept = (extracted.concept or raw_text)[:200]
+    suggestion = categories_service.suggest_category(
+        db,
+        user,
+        CategorySuggestRequest(type=tx_type, concept=concept, merchant=extracted.merchant),
+    )
+    amount = f"{extracted.amount:.2f}" if extracted.amount and extracted.amount > 0 else None
+    tx_date = (extracted.transaction_date or datetime.now(LIMA_TZ).date()).isoformat()
+    currency = (extracted.currency or wallet.currency.value).upper()
+
+    return TextPreviewResponse(
+        preview_id=uuid.uuid4(),
+        wallet_id=wallet.wallet_id,
+        extracted=ExtractedReceiptData(
+            type=tx_type,
+            amount=amount,
+            currency=currency,
+            concept=concept,
+            merchant=extracted.merchant,
+            ruc=None,
+            transaction_date=tx_date,
+            category=CategoryInfo(
+                id=suggestion.category.id,
+                name=suggestion.category.name,
+                icon=suggestion.category.icon or "tag",
+            ),
+        ),
+        confidence=round(min(max(extracted.confidence, 0.0), 1.0), 2),
+        requires_confirmation=True,
+    )
 
 def persist_confirmed(
     db: Session,
@@ -142,6 +218,7 @@ def create_from_text(
             "VALIDATION_ERROR",
             "El texto debe tener entre 1 y 500 caracteres.",
         )
+    _reject_non_transaction_text(raw_text)
 
     # 2. Obtener el monedero activo con bloqueo pesimista (FOR UPDATE) para garantizar atomicidad
     wallet = repository.get_wallet(db, user.user_id, data.wallet_id, for_update=True)
@@ -165,7 +242,7 @@ def create_from_text(
     if extracted.amount is None or extracted.amount <= Decimal("0.00"):
         raise AppError(
             422,
-            "AMOUNT_NOT_FOUND",
+            "AMOUNT_NOT_DETECTED",
             "No pude identificar el monto. ¿Cuánto fue el gasto o ingreso?",
         )
 

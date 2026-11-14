@@ -36,6 +36,7 @@ from app.modules.transactions.schemas import (
     CategoryInfo,
     ReceiptConfirmRequest,
     ReceiptPreviewResponse,
+    TextPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
@@ -57,6 +58,11 @@ router = APIRouter(
     tags=["transactions"],
     dependencies=[Depends(_no_cache)],
 )
+extractions_router = APIRouter(
+    prefix="/extractions",
+    tags=["transactions"],
+    dependencies=[Depends(_no_cache)],
+)
 
 # Inyección de dependencias tipadas
 DbSession = Annotated[Session, Depends(get_db)]
@@ -69,6 +75,20 @@ Bus = Annotated[NotificationBus, Depends(get_notification_bus)]
 # =============================================================================
 # Endpoints CU02: Transacción por Texto Libre
 # =============================================================================
+
+@extractions_router.post(
+    "/text",
+    response_model=TextPreviewResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Extraer vista previa desde texto libre",
+)
+def create_text_preview(
+    data: TextTransactionRequest,
+    db: DbSession,
+    current: Current,
+) -> TextPreviewResponse:
+    """Extrae monto, concepto y categoría sin persistir una transacción."""
+    return service.create_text_preview(db=db, user=current.user, data=data)
 
 @router.post(
     "/text",

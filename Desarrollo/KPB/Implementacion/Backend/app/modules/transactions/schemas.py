@@ -139,6 +139,16 @@ class ExtractedReceiptData(BaseModel):
     category: CategoryInfo | None = Field(default=None, description="Categoría tentativa asignada")
 
 
+class TextPreviewResponse(BaseModel):
+    """Vista previa de texto: se confirma después mediante POST /transactions."""
+
+    preview_id: uuid.UUID
+    wallet_id: uuid.UUID
+    extracted: ExtractedReceiptData
+    confidence: float
+    requires_confirmation: bool = True
+
+
 class ReceiptPreviewResponse(BaseModel):
     """Respuesta HTTP 200 con la vista previa del comprobante extraído (Paso 1)."""
 

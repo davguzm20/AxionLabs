@@ -60,6 +60,11 @@ export interface CategoryListResponse {
   data: Category[];
 }
 
+export interface CategoryCreatePayload {
+  name: string;
+  type: 'EXPENSE' | 'INCOME';
+}
+
 export interface BudgetCreatePayload {
   category_id: string;
   currency: Currency;

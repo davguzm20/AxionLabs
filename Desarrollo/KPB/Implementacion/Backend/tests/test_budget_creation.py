@@ -52,7 +52,7 @@ def test_list_budgets_keeps_categories_without_an_active_cap(engine) -> None:
         result = list_budgets(db, user, "ACTIVE", None)
 
     by_name = {item.category.name: item for item in result}
-    assert len(by_name) == 8
+    assert len(by_name) == 4
     assert by_name["Otros"].id == budget.budget_id
     assert by_name["Otros"].amount == "420.00"
     assert by_name["Alimentación"].id is None

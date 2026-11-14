@@ -195,11 +195,8 @@ class CategoryClassifier:
                     merchant=merchant,
                     candidates=candidates,
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Fallo llamada a OpenAI en clasificación, recurriendo a heurística: %s",
-                    exc,
-                )
+            except Exception:
+                logger.warning("OpenAI no disponible para clasificación; se usa heurística local.")
 
         # Fallback determinista con reglas heurísticas
         return self._classify_with_heuristics(
@@ -221,7 +218,8 @@ class CategoryClassifier:
 
         client = OpenAI(
             api_key=self._settings.openai_api_key,
-            timeout=self._settings.openai_timeout_seconds,
+            timeout=10.0,
+            max_retries=0,
         )
 
         user_content = (
@@ -234,6 +232,7 @@ class CategoryClassifier:
         response = client.chat.completions.create(
             model=self._settings.openai_text_model,
             temperature=0.0,
+            max_tokens=150,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},

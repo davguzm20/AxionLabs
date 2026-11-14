@@ -8,7 +8,7 @@ from app.modules.auth.router import preferences_router, router as auth_router
 from app.modules.budgets.router import router as budgets_router
 from app.modules.categories.router import router as categories_router
 from app.modules.notifications.router import router as notifications_router
-from app.modules.transactions.router import router as transactions_router
+from app.modules.transactions.router import extractions_router, router as transactions_router
 from app.modules.wallets.router import router as wallets_router
 
 # Metadatos OpenAPI para documentación interactiva en Swagger (/docs) y ReDoc (/redoc)
@@ -91,6 +91,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(preferences_router, prefix="/api/v1")
 app.include_router(categories_router, prefix="/api/v1")
 app.include_router(transactions_router, prefix="/api/v1")
+app.include_router(extractions_router, prefix="/api/v1")
 app.include_router(budgets_router, prefix="/api/v1")
 app.include_router(thresholds_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")

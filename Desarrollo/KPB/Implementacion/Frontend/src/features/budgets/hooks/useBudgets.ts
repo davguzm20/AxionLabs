@@ -1,16 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createBudget,
+  createBudgetCategory,
   deactivateBudget,
   getBudget,
   listBudgets,
-  listExpenseCategories,
+  listBudgetCategories,
   reactivateBudget,
   replaceBudgetThresholds,
   updateBudget,
 } from '../services/budgetService';
 import type {
   Budget,
+  Category,
+  CategoryCreatePayload,
   BudgetCreatePayload,
   BudgetStatus,
   BudgetUpdatePayload,
@@ -30,8 +33,8 @@ export function useBudgets(status: BudgetStatus = 'ACTIVE') {
     queryFn: ({ signal }) => listBudgets(status, signal),
   });
   const categoriesQuery = useQuery({
-    queryKey: ['categories', 'EXPENSE'],
-    queryFn: ({ signal }) => listExpenseCategories(signal),
+    queryKey: ['categories'],
+    queryFn: ({ signal }) => listBudgetCategories(signal),
     staleTime: 5 * 60_000,
   });
 
@@ -61,6 +64,14 @@ export function useBudgets(status: BudgetStatus = 'ACTIVE') {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['budgets'] }),
   });
 
+  const addCategoryMutation = useMutation<Category, Error, CategoryCreatePayload>({
+    mutationFn: createBudgetCategory,
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['categories'] });
+      await queryClient.invalidateQueries({ queryKey: ['budgets'] });
+    },
+  });
+
   return {
     budgets: budgetsQuery.data?.data ?? [],
     categories: categoriesQuery.data ?? [],
@@ -76,6 +87,8 @@ export function useBudgets(status: BudgetStatus = 'ACTIVE') {
     isDeactivating: deactivateMutation.isPending,
     reactivate: reactivateMutation.mutateAsync,
     isReactivating: reactivateMutation.isPending,
+    addCategory: addCategoryMutation.mutateAsync,
+    isAddingCategory: addCategoryMutation.isPending,
   };
 }
 

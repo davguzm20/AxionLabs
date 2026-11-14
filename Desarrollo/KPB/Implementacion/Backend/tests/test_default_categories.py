@@ -26,12 +26,8 @@ def test_new_user_receives_the_default_category_catalog(engine) -> None:
     assert {category.name for category in categories} == {
         "Alimentación",
         "Transporte",
-        "Servicios",
         "Salud",
-        "Ocio",
         "Otros",
-        "Sueldo",
-        "Inversiones",
     }
 
 
@@ -65,6 +61,6 @@ def test_category_list_filters_the_default_catalog_by_transaction_type(engine) -
         incomes = categories_service.list_categories(db, user, category_type="INCOME")
 
     assert {category.name for category in expenses} == {
-        "Alimentación", "Transporte", "Servicios", "Salud", "Ocio", "Otros"
+        "Alimentación", "Transporte", "Salud", "Otros"
     }
-    assert {category.name for category in incomes} == {"Sueldo", "Inversiones"}
+    assert incomes == []

@@ -7,10 +7,20 @@ import { z } from 'zod';
 import { ApiError } from '../../../lib/errors';
 import { useBudgetDetails, useBudgets } from '../hooks/useBudgets';
 import { calculatePercentage, formatMoney, normalizeMoney, parseMoneyToCents } from '../utils/money';
-import type { BudgetCreatePayload, BudgetPeriodType, BudgetUpdatePayload, Currency } from '../types/budget.types';
+import type { BudgetCreatePayload, BudgetPeriodType, BudgetUpdatePayload, CategoryCreatePayload, Currency } from '../types/budget.types';
 
 const presetThresholds = [75, 80, 90, 100];
 const MAX_DAYS = 366;
+const BUDGET_CATEGORY_CATALOG: ReadonlyArray<CategoryCreatePayload> = [
+  { name: 'Alimentación', type: 'EXPENSE' },
+  { name: 'Transporte', type: 'EXPENSE' },
+  { name: 'Servicios', type: 'EXPENSE' },
+  { name: 'Salud', type: 'EXPENSE' },
+  { name: 'Ocio', type: 'EXPENSE' },
+  { name: 'Otros', type: 'EXPENSE' },
+  { name: 'Sueldo', type: 'INCOME' },
+  { name: 'Inversiones', type: 'INCOME' },
+];
 
 const formSchema = z.object({
   category_id: z.string().min(1, 'Selecciona una categoría de gasto.'),
@@ -75,6 +85,8 @@ export function BudgetFormPage() {
     categoriesError,
     save,
     isSaving,
+    addCategory,
+    isAddingCategory,
   } = useBudgets('ACTIVE');
   const [submitError, setSubmitError] = useState<string>();
   const [customThreshold, setCustomThreshold] = useState('');
@@ -110,8 +122,16 @@ export function BudgetFormPage() {
   }, [budget, reset]);
 
   const values = watch();
-  const selectedCategory = categories.find((category) => category.id === values.category_id) ?? budget?.category;
-  const budgetCategoryIsListed = budget ? categories.some((category) => category.id === budget.category.id) : true;
+  const categoryOptions = BUDGET_CATEGORY_CATALOG.map((catalogCategory) => {
+    const existing = categories.find((category) => category.name === catalogCategory.name);
+    return {
+      ...catalogCategory,
+      id: existing?.id ?? `catalog:${catalogCategory.name}`,
+      icon: existing?.icon ?? 'tag',
+    };
+  });
+  const selectedCategory = categoryOptions.find((category) => category.id === values.category_id) ?? budget?.category;
+  const budgetCategoryIsListed = budget ? categoryOptions.some((category) => category.id === budget.category.id) : true;
   const normalizedAmount = normalizeMoney(values.amount) ?? '0.00';
   const previewConsumed = budget?.consumed ?? '0.00';
   const previewPercentage = useMemo(
@@ -123,6 +143,7 @@ export function BudgetFormPage() {
   const previewRemaining = centsToDecimal(amountCents - consumedCents);
   const isLoading = isCategoriesLoading || (isEditing && budgetQuery.isPending);
   const loadError = categoriesError ?? budgetQuery.error;
+  const isSubmitting = isSaving || isAddingCategory;
 
   function toggleThreshold(value: number) {
     const current = values.thresholds ?? [];
@@ -157,15 +178,6 @@ export function BudgetFormPage() {
     const periodType = formValues.period_type as BudgetPeriodType;
     const startDate = periodType === 'CUSTOM' ? formValues.start_date : null;
     const periodDays = periodType === 'CUSTOM' ? Number(formValues.period_days) : null;
-    const createPayload: BudgetCreatePayload = {
-      category_id: formValues.category_id,
-      currency: formValues.currency as Currency,
-      amount,
-      period_type: periodType,
-      start_date: startDate,
-      period_days: periodDays,
-      thresholds: formValues.thresholds,
-    };
     const updatePayload: BudgetUpdatePayload = {
       amount,
       period_type: periodType,
@@ -174,6 +186,24 @@ export function BudgetFormPage() {
     };
 
     try {
+      let categoryId = formValues.category_id;
+      const catalogCategory = categoryOptions.find((category) => category.id === categoryId);
+      if (!isEditing && catalogCategory && categoryId.startsWith('catalog:')) {
+        const created = await addCategory({
+          name: catalogCategory.name,
+          type: catalogCategory.type,
+        });
+        categoryId = created.id;
+      }
+      const createPayload: BudgetCreatePayload = {
+        category_id: categoryId,
+        currency: formValues.currency as Currency,
+        amount,
+        period_type: periodType,
+        start_date: startDate,
+        period_days: periodDays,
+        thresholds: formValues.thresholds,
+      };
       await save({ budgetId, createPayload, updatePayload, thresholds: formValues.thresholds });
       navigate('/presupuestos', { replace: true });
     } catch (cause) {
@@ -244,7 +274,7 @@ export function BudgetFormPage() {
                 >
                   <option value="">Selecciona una categoría</option>
                   {isEditing && budget && !budgetCategoryIsListed && <option value={budget.category.id}>{budget.category.name}</option>}
-                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  {categoryOptions.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                 </select>
                 <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-500" size={18} />
               </div>
@@ -361,9 +391,9 @@ export function BudgetFormPage() {
 
         <footer className="sticky bottom-0 z-10 shrink-0 border-t border-ink-300 bg-white px-4 py-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:px-6">
           <div className="mx-auto flex max-w-2xl gap-3">
-            <button type="button" onClick={leaveForm} disabled={isSaving} className="min-h-11 flex-1 rounded-md border border-danger-600 bg-white px-3 text-sm font-semibold text-danger-600 disabled:opacity-50">Cancelar</button>
-            <button type="submit" disabled={isSaving} aria-busy={isSaving} className="min-h-11 flex-1 rounded-md bg-accent-600 px-3 text-sm font-semibold text-white hover:bg-accent-500 disabled:cursor-wait disabled:opacity-60">
-              {isSaving ? 'Guardando…' : isEditing ? 'Guardar cambios' : 'Crear presupuesto'}
+            <button type="button" onClick={leaveForm} disabled={isSubmitting} className="min-h-11 flex-1 rounded-md border border-danger-600 bg-white px-3 text-sm font-semibold text-danger-600 disabled:opacity-50">Cancelar</button>
+            <button type="submit" disabled={isSubmitting} aria-busy={isSubmitting} className="min-h-11 flex-1 rounded-md bg-accent-600 px-3 text-sm font-semibold text-white hover:bg-accent-500 disabled:cursor-wait disabled:opacity-60">
+              {isSubmitting ? 'Guardando…' : isEditing ? 'Guardar cambios' : 'Crear presupuesto'}
             </button>
           </div>
         </footer>

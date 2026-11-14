@@ -34,12 +34,8 @@ DEFAULT_ICONS: dict[str, str] = {
 DEFAULT_CATEGORY_NAMES = (
     "Alimentación",
     "Transporte",
-    "Servicios",
     "Salud",
-    "Ocio",
     "Otros",
-    "Sueldo",
-    "Inversiones",
 )
 
 
