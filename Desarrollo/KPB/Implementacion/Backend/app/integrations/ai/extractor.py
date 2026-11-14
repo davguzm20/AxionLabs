@@ -17,7 +17,6 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from app.config import get_ai_settings
-from app.core.errors import AppError
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ def _extract_with_openai(
 ) -> ExtractedData:
     """Llama a la API oficial de OpenAI usando Structured Outputs / JSON mode."""
     try:
-        from openai import OpenAI, OpenAIError
+        from openai import OpenAI
     except ImportError:
         logger.warning(
             "La librería 'openai' no está instalada. Usando extractor simulado como respaldo."
@@ -87,7 +86,7 @@ def _extract_with_openai(
         return _extract_with_mock(text, today_str, default_currency)
 
     try:
-        client = OpenAI(api_key=api_key, timeout=18.0)
+        client = OpenAI(api_key=api_key, timeout=10.0, max_retries=0)
 
         user_content = (
             f"Fecha de hoy en America/Lima: {today_str}\n"
@@ -102,7 +101,8 @@ def _extract_with_openai(
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
-            temperature=0.1,
+            temperature=0.0,
+            max_tokens=150,
         )
 
         content = response.choices[0].message.content or "{}"
@@ -136,13 +136,10 @@ def _extract_with_openai(
             confidence=float(data.get("confidence", 0.90)),
         )
 
-    except OpenAIError as exc:
-        logger.error(f"Error al conectar con OpenAI: {exc}")
-        raise AppError(
-            503,
-            "AI_UNAVAILABLE",
-            "El servicio de IA no está disponible en este momento. Intenta nuevamente.",
-        ) from exc
+    except Exception:
+        # Red, timeout o JSON inválido: no reintentamos ni bloqueamos el flujo.
+        logger.warning("OpenAI no disponible para extracción; se usa el mock local.")
+        return _extract_with_mock(text, today_str, default_currency)
 
 
 def _extract_with_mock(

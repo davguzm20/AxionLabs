@@ -31,6 +31,26 @@ DEFAULT_ICONS: dict[str, str] = {
     "otros": "tag",
 }
 
+DEFAULT_CATEGORY_NAMES = (
+    "Alimentación",
+    "Transporte",
+    "Salud",
+    "Otros",
+)
+
+
+def ensure_default_categories(db: Session, user_id: uuid.UUID) -> bool:
+    """Crea el catálogo inicial faltante para una cuenta existente."""
+    existing_names = set(
+        db.scalars(select(Category.name).where(Category.user_id == user_id))
+    )
+    missing = [name for name in DEFAULT_CATEGORY_NAMES if name not in existing_names]
+    if not missing:
+        return False
+    db.add_all([Category(user_id=user_id, name=name) for name in missing])
+    db.flush()
+    return True
+
 
 def resolve_icon(category_name: str, custom_icon: str | None = None) -> str:
     """Resuelve el icono Lucide apropiado para una categoría."""
@@ -68,7 +88,7 @@ def get_category_by_id(
     """Obtiene una categoría por su ID verificando pertenencia o sistema."""
     stmt = select(Category).where(
         Category.category_id == category_id,
-        (Category.user_id == user_id) | (Category.user_id.is_(None)),
+        Category.user_id == user_id,
     )
     return db.execute(stmt).scalars().first()
 
@@ -83,7 +103,7 @@ def get_category_by_name(
     stmt = (
         select(Category)
         .where(
-            (Category.user_id == user_id) | (Category.user_id.is_(None)),
+            Category.user_id == user_id,
             func.lower(Category.name) == clean_name.lower(),
         )
         .order_by(Category.user_id.desc().nullslast())  # Prioriza la propia del usuario
@@ -91,10 +111,10 @@ def get_category_by_name(
     return db.execute(stmt).scalars().first()
 
 
-def get_fallback_category(db: Session, category_type: str = "EXPENSE") -> Category:
+def get_fallback_category(db: Session, user_id: uuid.UUID) -> Category:
     """Obtiene la categoría del sistema 'Otros'. Si no existiera en la BD, la crea."""
     stmt = select(Category).where(
-        Category.user_id.is_(None),
+        Category.user_id == user_id,
         func.lower(Category.name) == "otros",
     )
     category = db.execute(stmt).scalars().first()
@@ -103,6 +123,7 @@ def get_fallback_category(db: Session, category_type: str = "EXPENSE") -> Catego
 
     # Fallback de respaldo si aún no se corrió el seed en la BD
     fallback = Category(
+        user_id=user_id,
         name="Otros",
         description="Categoría por defecto para gastos sin clasificar",
     )
@@ -144,14 +165,14 @@ def update_category(
     return category
 
 
-def delete_category(db: Session, category: Category) -> None:
+def delete_category(db: Session, category: Category, user_id: uuid.UUID) -> None:
     """Elimina una categoría propia del usuario según ADR-016.
 
     - Si tiene transacciones vinculadas, las reasigna automáticamente a 'Otros'.
     - Si tiene presupuestos asociados, los desvincula o elimina.
     - Finalmente elimina físicamente la categoría.
     """
-    fallback = get_fallback_category(db)
+    fallback = get_fallback_category(db, user_id)
 
     # Reasignar transacciones asociadas a la categoría 'Otros'
     db.execute(

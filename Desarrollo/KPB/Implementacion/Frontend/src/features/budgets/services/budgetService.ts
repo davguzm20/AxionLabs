@@ -1,11 +1,13 @@
 import { api } from '../../../lib/api';
 import type {
   Budget,
+  CategoryCreatePayload,
   BudgetCreatePayload,
   BudgetListResponse,
   BudgetStatus,
   BudgetUpdatePayload,
   Category,
+  CategoryListResponse,
 } from '../types/budget.types';
 
 export async function listBudgets(
@@ -20,12 +22,18 @@ export async function getBudget(id: string, signal?: AbortSignal): Promise<Budge
   return api<Budget>(`/budgets/${encodeURIComponent(id)}`, { signal });
 }
 
-export async function listExpenseCategories(signal?: AbortSignal): Promise<Category[]> {
-  const query = new URLSearchParams({ type: 'expense' });
-  const response = await api<{ data: Array<{ id: string; name: string; type: 'expense' | 'income' }> }>(`/categories?${query.toString()}`, { signal });
-  return response.data
-    .filter((category) => category.type === 'expense')
-    .map((category) => ({ ...category, type: 'EXPENSE' as const, icon: 'circle-help' }));
+export async function listBudgetCategories(signal?: AbortSignal): Promise<Category[]> {
+  const response = await api<CategoryListResponse | Category[]>('/categories', { signal });
+  const categories = Array.isArray(response) ? response : response.data;
+  return categories.filter((category) => category.status !== 'INACTIVE');
+}
+
+export async function createBudgetCategory(payload: CategoryCreatePayload): Promise<Category> {
+  return api<Category>('/categories', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function createBudget(payload: BudgetCreatePayload): Promise<Budget> {

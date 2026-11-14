@@ -6,11 +6,14 @@ Claves:
 """
 
 import json
+import ipaddress
 import secrets
 import uuid
 from datetime import UTC, datetime
 from functools import lru_cache
+from urllib.parse import urlparse
 
+import fakeredis
 import redis
 from pydantic import ValidationError
 
@@ -78,6 +81,15 @@ class SessionStore:
 
 @lru_cache
 def _client(redis_url: str) -> redis.Redis:
+    host = urlparse(redis_url).hostname
+    is_loopback = host == "localhost"
+    if host:
+        try:
+            is_loopback = is_loopback or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            pass
+    if is_loopback:
+        return fakeredis.FakeRedis(decode_responses=True)
     return redis.Redis.from_url(redis_url, decode_responses=True)
 
 

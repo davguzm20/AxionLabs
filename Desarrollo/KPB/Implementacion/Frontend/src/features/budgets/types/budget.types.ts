@@ -33,12 +33,36 @@ export interface Budget {
   thresholds: BudgetThreshold[];
 }
 
+export interface BudgetWithoutCap {
+  id: null;
+  category: Category;
+  currency: null;
+  amount: null;
+  period_type: null;
+  start_date: null;
+  period_days: null;
+  period_start: null;
+  period_end: null;
+  consumed: null;
+  remaining: null;
+  percentage: number;
+  status: 'NONE';
+  thresholds: BudgetThreshold[];
+}
+
+export type BudgetListItem = Budget | BudgetWithoutCap;
+
 export interface BudgetListResponse {
-  data: Budget[];
+  data: BudgetListItem[];
 }
 
 export interface CategoryListResponse {
   data: Category[];
+}
+
+export interface CategoryCreatePayload {
+  name: string;
+  type: 'EXPENSE' | 'INCOME';
 }
 
 export interface BudgetCreatePayload {

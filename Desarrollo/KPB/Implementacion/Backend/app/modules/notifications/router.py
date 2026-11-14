@@ -27,7 +27,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 DbSession = Annotated[Session, Depends(get_db)]
 Current = Annotated[CurrentSession, Depends(get_current_session)]
 Bus = Annotated[NotificationBus, Depends(get_notification_bus)]
-StreamClient = Annotated[aioredis.Redis, Depends(sse.get_stream_client)]
+StreamClient = Annotated[aioredis.Redis | None, Depends(sse.get_stream_client)]
 
 
 @router.get("", response_model=NotificationList, summary="Listar notificaciones")

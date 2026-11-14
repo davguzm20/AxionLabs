@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import uuid
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 import anyio
 import redis
@@ -26,12 +28,28 @@ def _unavailable() -> AppError:
     )
 
 
-def get_stream_client() -> aioredis.Redis:
+def _uses_local_redis(redis_url: str) -> bool:
+    host = urlparse(redis_url).hostname
+    if host == "localhost":
+        return True
+    if host is None:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def get_stream_client() -> aioredis.Redis | None:
     """Dependencia de FastAPI: un cliente propio por stream, que `_events` cierra al terminar."""
     try:
         redis_url = get_auth_settings().redis_url
     except ValidationError as error:
         raise _unavailable() from error
+    # fakeredis es sincrono y no implementa pub/sub async. En desarrollo se
+    # conserva un SSE valido con heartbeats, sin intentar abrir Redis real.
+    if _uses_local_redis(redis_url):
+        return None
     return aioredis.from_url(redis_url, decode_responses=True)
 
 
@@ -51,12 +69,14 @@ def _connection_ttl(heartbeat: float) -> int:
 
 
 async def open_stream(
-    client: aioredis.Redis,
+    client: aioredis.Redis | None,
     user_id: uuid.UUID,
     session_id: str,
     heartbeat: float,
 ) -> AsyncIterator[str]:
     """Reserva la conexion y se suscribe antes de responder, para no perder eventos."""
+    if client is None:
+        return _local_events(heartbeat)
     key = _connection_key(user_id)
     try:
         connections = await client.incr(key)
@@ -71,6 +91,14 @@ async def open_stream(
         await client.aclose()
         raise _unavailable() from error
     return _events(client, pubsub, key, session_id, heartbeat)
+
+
+async def _local_events(heartbeat: float) -> AsyncIterator[str]:
+    """Mantiene SSE operativo localmente cuando las notificaciones no tienen Redis async."""
+    yield "retry: 30000\n\n"
+    while True:
+        await anyio.sleep(heartbeat)
+        yield ": notifications unavailable in local development\n\n"
 
 
 async def _events(

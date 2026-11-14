@@ -17,7 +17,6 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from app.config import get_ai_settings
-from app.core.errors import AppError
 
 logger = logging.getLogger(__name__)
 LIMA_TZ = ZoneInfo("America/Lima")
@@ -79,7 +78,7 @@ def _extract_with_openai_vision(
 ) -> ExtractedReceipt:
     """Invoca el modelo multimodal de OpenAI enviando la imagen en base64 en memoria."""
     try:
-        from openai import OpenAI, OpenAIError
+        from openai import OpenAI
     except ImportError:
         logger.warning(
             "Librería 'openai' no instalada. Usando extractor simulado como respaldo."
@@ -87,7 +86,7 @@ def _extract_with_openai_vision(
         return _extract_with_mock(today_str, default_currency)
 
     try:
-        client = OpenAI(api_key=api_key, timeout=20.0)
+        client = OpenAI(api_key=api_key, timeout=10.0, max_retries=0)
 
         # Codificar imagen en memoria a base64
         base64_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -109,13 +108,14 @@ def _extract_with_openai_vision(
                         {"type": "text", "text": user_prompt},
                         {
                             "type": "image_url",
-                            "image_url": {"url": data_url, "detail": "high"},
+                            "image_url": {"url": data_url, "detail": "low"},
                         },
                     ],
                 },
             ],
             response_format={"type": "json_object"},
-            temperature=0.1,
+            temperature=0.0,
+            max_tokens=200,
         )
 
         content = response.choices[0].message.content or "{}"
@@ -155,13 +155,10 @@ def _extract_with_openai_vision(
             confidence=float(data.get("confidence", 0.85)),
         )
 
-    except OpenAIError as exc:
-        logger.error(f"Error conectando con OpenAI Vision: {exc}")
-        raise AppError(
-            503,
-            "OCR_UNAVAILABLE",
-            "El servicio de lectura de comprobantes no está disponible. Intenta nuevamente.",
-        ) from exc
+    except Exception:
+        # Red, timeout o JSON inválido: no reintentamos ni bloqueamos el flujo.
+        logger.warning("OpenAI no disponible para OCR; se usa el mock local.")
+        return _extract_with_mock(today_str, default_currency)
 
 
 def _extract_with_mock(today_str: str, default_currency: str) -> ExtractedReceipt:

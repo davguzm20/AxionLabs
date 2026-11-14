@@ -11,6 +11,8 @@ Orquesta:
 from __future__ import annotations
 
 import logging
+import re
+import math
 import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -49,13 +51,18 @@ from app.modules.transactions.audio_validation import (
 from app.modules.transactions.image_validation import validate_and_prepare_image
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    CurrencySummary,
     ExtractedReceiptData,
+    PaginationMeta,
     ReceiptConfirmRequest,
     ReceiptPreviewResponse,
+    TextPreviewResponse,
     TextTransactionRequest,
     TextTransactionResponse,
     TransactionCorrectionRequest,
+    TransactionListResponse,
     TransactionOut,
+    TransactionSummaryResponse,
     VoiceConfirmRequest,
     VoicePreviewResponse,
 )
@@ -86,6 +93,80 @@ def _validate_transaction_date(tx_date: date) -> None:
 # =============================================================================
 # CU02: Registro de Transacción por Texto Libre
 # =============================================================================
+
+_PURE_GREETING_RE = re.compile(
+    r"^\s*[!¡.,?]*\s*(?:hola|holi|hey|buenas(?:\s+tardes|\s+noches)?|buen(?:os|as)\s+d[ií]as|qué\s+tal|que\s+tal)\s*[!¡.,?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _reject_non_transaction_text(text: str) -> None:
+    """Detiene saludos antes de invocar extracción/clasificación financiera."""
+    if _PURE_GREETING_RE.fullmatch(text):
+        raise AppError(
+            422,
+            "GREETING_ONLY",
+            "¡Hola! Soy KhipuBot. ¿Qué gasto o ingreso quieres registrar hoy?",
+        )
+
+def create_text_preview(
+    db: Session,
+    user: User,
+    data: TextTransactionRequest,
+) -> TextPreviewResponse:
+    """Extrae y clasifica texto sin crear una transacción ni tocar saldos."""
+    raw_text = data.text.strip()
+    if not (1 <= len(raw_text) <= 500):
+        raise AppError(422, "VALIDATION_ERROR", "El texto debe tener entre 1 y 500 caracteres.")
+    _reject_non_transaction_text(raw_text)
+
+    wallet = repository.get_wallet(db, user.user_id, data.wallet_id)
+    if wallet is None:
+        raise AppError(409, "NO_ACTIVE_WALLET", "Crea un monedero antes de registrar una transacción.")
+
+    extracted = extract_transaction_from_text(
+        text=raw_text,
+        client_timezone=data.client_timezone,
+        default_currency=wallet.currency.value,
+    )
+    if extracted.amount is None or extracted.amount <= Decimal("0.00"):
+        raise AppError(
+            422,
+            "AMOUNT_NOT_DETECTED",
+            "No pude identificar el monto. ¿Cuánto fue el gasto o ingreso?",
+            details=[{"field": "amount", "message": "El monto es obligatorio."}],
+        )
+    tx_type = "INCOME" if extracted.type == "INCOME" else "EXPENSE"
+    concept = (extracted.concept or raw_text)[:200]
+    suggestion = categories_service.suggest_category(
+        db,
+        user,
+        CategorySuggestRequest(type=tx_type, concept=concept, merchant=extracted.merchant),
+    )
+    amount = f"{extracted.amount:.2f}" if extracted.amount and extracted.amount > 0 else None
+    tx_date = (extracted.transaction_date or datetime.now(LIMA_TZ).date()).isoformat()
+    currency = (extracted.currency or wallet.currency.value).upper()
+
+    return TextPreviewResponse(
+        preview_id=uuid.uuid4(),
+        wallet_id=wallet.wallet_id,
+        extracted=ExtractedReceiptData(
+            type=tx_type,
+            amount=amount,
+            currency=currency,
+            concept=concept,
+            merchant=extracted.merchant,
+            ruc=None,
+            transaction_date=tx_date,
+            category=CategoryInfo(
+                id=suggestion.category.id,
+                name=suggestion.category.name,
+                icon=suggestion.category.icon or "tag",
+            ),
+        ),
+        confidence=round(min(max(extracted.confidence, 0.0), 1.0), 2),
+        requires_confirmation=True,
+    )
 
 def persist_confirmed(
     db: Session,
@@ -137,6 +218,7 @@ def create_from_text(
             "VALIDATION_ERROR",
             "El texto debe tener entre 1 y 500 caracteres.",
         )
+    _reject_non_transaction_text(raw_text)
 
     # 2. Obtener el monedero activo con bloqueo pesimista (FOR UPDATE) para garantizar atomicidad
     wallet = repository.get_wallet(db, user.user_id, data.wallet_id, for_update=True)
@@ -160,7 +242,7 @@ def create_from_text(
     if extracted.amount is None or extracted.amount <= Decimal("0.00"):
         raise AppError(
             422,
-            "AMOUNT_NOT_FOUND",
+            "AMOUNT_NOT_DETECTED",
             "No pude identificar el monto. ¿Cuánto fue el gasto o ingreso?",
         )
 
@@ -190,7 +272,7 @@ def create_from_text(
         category = repository.get_category_by_name(db, user.user_id, extracted.concept)
 
     if category is None or extracted.confidence < 0.60:
-        category = repository.get_fallback_category(db)
+        category = repository.get_fallback_category(db, user.user_id)
         needs_review = True
 
     # 8. Determinar tipo y delta para el saldo del monedero
@@ -376,7 +458,7 @@ def create_receipt_preview(
         category = repository.get_category_by_name(db, user.user_id, search_term)
 
     if category is None:
-        category = repository.get_fallback_category(db)
+        category = repository.get_fallback_category(db, user.user_id)
 
     # 5. Generar preview_id temporal
     preview_id = uuid.uuid4()
@@ -784,4 +866,145 @@ def _save_voice_transaction(
         wallet_balance=f"{wallet.current_balance:.2f}",
         alerts=alerts,
         message=f"Listo, registré {symbol} {transaction.amount:.2f} en {category.name}.",
+    )
+
+
+# =============================================================================
+# Slice 009: Consulta paginada y resumen de transacciones
+# =============================================================================
+
+_SOURCE_MAP: dict[SourceType, str] = {
+    SourceType.TEXTO: "TEXT",
+    SourceType.VOZ: "VOICE",
+    SourceType.OCR: "OCR",
+}
+
+
+def _parse_tx_type_filter(tx_type: str | None) -> TransactionType | None:
+    """Convierte el filtro de tipo de API ('INCOME'/'EXPENSE') al enum de dominio."""
+    if tx_type is None:
+        return None
+    if tx_type == "INCOME":
+        return TransactionType.INGRESO
+    if tx_type == "EXPENSE":
+        return TransactionType.GASTO
+    raise AppError(422, "INVALID_TRANSACTION_TYPE", "Tipo de transacción inválido.")
+
+
+def _to_transaction_out(transaction: Transaction) -> TransactionOut:
+    """Serializa una entidad Transaction al esquema TransactionOut."""
+    cat_name = transaction.category.name if transaction.category else "Otros"
+    tx_date_str = transaction.transacted_at.date().isoformat()
+    created_str = transaction.created_at.isoformat() if transaction.created_at else tx_date_str
+    return TransactionOut(
+        id=transaction.transaction_id,
+        type="INCOME" if transaction.type == TransactionType.INGRESO else "EXPENSE",
+        amount=f"{transaction.amount:.2f}",
+        currency=transaction.currency.value,
+        concept=transaction.concept,
+        merchant=None,
+        transaction_date=tx_date_str,
+        wallet_id=transaction.wallet_id,
+        category=CategoryInfo(
+            id=transaction.category_id,
+            name=cat_name,
+            icon="tag",
+        ),
+        source=_SOURCE_MAP.get(transaction.source_type, "TEXT"),
+        needs_review=False,
+        created_at=created_str,
+    )
+
+
+def list_transactions(
+    db: Session,
+    user: User,
+    page: int = 1,
+    page_size: int = 20,
+    tx_type: str | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+    sort: str = "transaction_date",
+    order: str = "desc",
+) -> TransactionListResponse:
+    """Retorna el historial paginado de transacciones del usuario con filtros."""
+    domain_type = _parse_tx_type_filter(tx_type)
+    rows, total = repository.list_transactions(
+        db=db,
+        user_id=user.user_id,
+        page=page,
+        page_size=page_size,
+        tx_type=domain_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+        sort=sort,
+        order=order,
+    )
+    pages = math.ceil(total / page_size) if total > 0 else 0
+    return TransactionListResponse(
+        data=[_to_transaction_out(tx) for tx in rows],
+        meta=PaginationMeta(
+            page=page,
+            page_size=page_size,
+            total=total,
+            pages=pages,
+        ),
+    )
+
+
+def get_transactions_summary(
+    db: Session,
+    user: User,
+    tx_type: str | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: str | None = None,
+) -> TransactionSummaryResponse:
+    """Calcula los totales de ingresos, egresos y saldo neto agrupados por moneda."""
+    domain_type = _parse_tx_type_filter(tx_type)
+    total_count, grouped = repository.get_transactions_summary(
+        db=db,
+        user_id=user.user_id,
+        tx_type=domain_type,
+        category_id=category_id,
+        wallet_id=wallet_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+    )
+
+    totals_by_currency: dict[str, dict[str, Decimal]] = {}
+    for currency, row_type, amount in grouped:
+        code = currency.value
+        bucket = totals_by_currency.setdefault(
+            code, {"income": Decimal("0.00"), "expense": Decimal("0.00")}
+        )
+        if row_type == TransactionType.INGRESO:
+            bucket["income"] += amount
+        else:
+            bucket["expense"] += amount
+
+    by_currency = [
+        CurrencySummary(
+            currency=code,
+            income=f"{vals['income']:.2f}",
+            expense=f"{vals['expense']:.2f}",
+            net=f"{(vals['income'] - vals['expense']):.2f}",
+        )
+        for code, vals in totals_by_currency.items()
+    ]
+
+    return TransactionSummaryResponse(
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        count=total_count,
+        by_currency=by_currency,
     )

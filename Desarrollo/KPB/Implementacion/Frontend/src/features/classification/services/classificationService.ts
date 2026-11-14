@@ -1,13 +1,12 @@
+import { api } from '../../../lib/api';
 import type {
   CategoriesResponse,
   Category,
-  ApiCategory,
   ClassificationRequest,
   ClassificationResponse,
 } from '../types/classification.types';
-import { apiRaw } from '../../../lib/api';
 
-async function parseResponse<T>(response: Response): Promise<T> {
+export async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     throw new Error('No se pudo obtener la clasificación. Inténtalo nuevamente.');
   }
@@ -15,27 +14,36 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function getCategories(signal?: AbortSignal): Promise<Category[]> {
-  const response = await apiRaw('/categories', { signal });
-  const result = await parseResponse<CategoriesResponse>(response);
-  return result.data.map((category: ApiCategory) => ({
-    ...category,
-    type: category.type.toUpperCase() as Category['type'],
-    icon: 'circle-help',
-  }));
+export async function getCategories(
+  signal?: AbortSignal,
+  type?: Category['type'],
+): Promise<CategoriesResponse> {
+  const query = type ? `?type=${encodeURIComponent(type)}` : '';
+  const payload = await api<unknown>(`/categories${query}`, { signal });
+  const categories = Array.isArray(payload)
+    ? payload
+    : typeof payload === 'object' && payload !== null && Array.isArray((payload as { data?: unknown }).data)
+      ? (payload as { data: unknown[] }).data
+      : null;
+
+  if (!categories) throw new Error('La respuesta de categorías no es válida.');
+
+  return categories.map((item) => {
+    const category = item as Category;
+    return { ...category, type: String(category.type).toUpperCase() as Category['type'] };
+  });
 }
 
 export async function classifyTransaction(
   request: ClassificationRequest,
   signal?: AbortSignal,
 ): Promise<ClassificationResponse> {
-  const response = await apiRaw('/categories/suggestions', {
+  return api<ClassificationResponse>('/categories/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
     signal,
   });
-  return parseResponse<ClassificationResponse>(response);
 }
 
 export function getFallbackCategory(categories: Category[]): Category {

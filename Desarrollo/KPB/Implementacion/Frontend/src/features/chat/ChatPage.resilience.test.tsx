@@ -165,6 +165,29 @@ describe('CU02 — peticiones, recuperación de errores y persistencia del front
     expect(save).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      input: 'hola',
+      code: 'GREETING_ONLY',
+      message: '¡Hola! Soy KhipuBot. ¿Qué gasto o ingreso quieres registrar hoy?',
+    },
+    {
+      input: 'compré un menú',
+      code: 'AMOUNT_NOT_DETECTED',
+      message: 'No pude identificar el monto. ¿Cuánto fue el gasto o ingreso?',
+    },
+  ])('C02-RES-06b: $code responde en una burbuja y no muestra vista previa', async ({ input, code, message }) => {
+    server.use(
+      http.post('*/api/v1/extractions/text', () => contractError(422, code, message)),
+    );
+    renderChat();
+    await sendText(input);
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Revisa tu transacción' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Aceptar' })).not.toBeInTheDocument();
+  });
+
   it('C02-RES-07: envía el contrato completo con token, fecha de Lima y categoría sugerida', async () => {
     const save = vi.fn();
     server.use(http.post('*/api/v1/transactions', async ({ request }) => {

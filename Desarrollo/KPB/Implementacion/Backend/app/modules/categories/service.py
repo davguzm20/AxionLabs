@@ -30,13 +30,22 @@ from app.modules.categories.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# La tabla histÃ³rica no conserva el tipo. El catÃ¡logo por defecto sÃ­ tiene
+# nombres estables; con ellos evitamos que ingresos compitan al clasificar un
+# gasto. Las categorÃ­as personalizadas siguen el valor por defecto: gasto.
+INCOME_CATEGORY_NAMES = frozenset({"sueldo", "inversiones", "salario", "ventas"})
+
+
+def _category_type(cat: Category) -> str:
+    return "INCOME" if cat.name.strip().casefold() in INCOME_CATEGORY_NAMES else "EXPENSE"
+
 
 def _to_category_item(cat: Category, category_type: str = "EXPENSE") -> CategoryItem:
     """Convierte una entidad SQLAlchemy Category a un CategoryItem de API."""
     return CategoryItem(
         id=cat.category_id,
         name=cat.name,
-        type=category_type,
+        type=_category_type(cat),
         icon=resolve_icon(cat.name),
         is_system=cat.is_system,
         status="ACTIVE",
@@ -57,14 +66,20 @@ def suggest_category(
       se asigna 'Otros' y se marca needs_review=True.
     """
     # 1. Obtener todas las categorías candidatas del usuario y del sistema
+    if repository.ensure_default_categories(db, user.user_id):
+        db.commit()
+
     candidates_entities = repository.list_categories(
         db=db,
         user_id=user.user_id,
-        include_system=True,
+        include_system=False,
     )
+    candidates_entities = [
+        category for category in candidates_entities if _category_type(category) == request.type
+    ]
 
     if not candidates_entities:
-        fallback = repository.get_fallback_category(db, request.type)
+        fallback = repository.get_fallback_category(db, user.user_id)
         return CategorySuggestResponse(
             category=CategorySuggested(
                 id=fallback.category_id,
@@ -108,7 +123,7 @@ def suggest_category(
     CONFIDENCE_THRESHOLD = 0.60
 
     if assigned_category is None or result.confidence < CONFIDENCE_THRESHOLD:
-        fallback = repository.get_fallback_category(db, request.type)
+        fallback = repository.get_fallback_category(db, user.user_id)
         return CategorySuggestResponse(
             category=CategorySuggested(
                 id=fallback.category_id,
@@ -140,14 +155,19 @@ def list_categories(
     status_filter: str | None = None,
 ) -> list[CategoryItem]:
     """Lista las categorías del usuario y del sistema."""
+    if repository.ensure_default_categories(db, user.user_id):
+        db.commit()
+
     entities = repository.list_categories(
         db=db,
         user_id=user.user_id,
         category_type=category_type,
-        include_system=include_system,
+        include_system=False,
         status_filter=status_filter,
     )
-    return [_to_category_item(cat, category_type or "EXPENSE") for cat in entities]
+    if category_type is not None:
+        entities = [cat for cat in entities if _category_type(cat) == category_type]
+    return [_to_category_item(cat) for cat in entities]
 
 
 def get_category(
@@ -264,6 +284,6 @@ def delete_category(
             message="La categoría base 'Otros' no puede ser eliminada.",
         )
 
-    repository.delete_category(db, cat)
+    repository.delete_category(db, cat, user.user_id)
     db.commit()
 

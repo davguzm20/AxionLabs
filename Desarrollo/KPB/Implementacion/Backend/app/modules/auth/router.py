@@ -21,6 +21,8 @@ from app.modules.auth.schemas import (
     RegisterRequest,
     RegisterResponse,
     SessionOut,
+    UserPreferencesOut,
+    UserPreferencesUpdate,
     UserOut,
 )
 
@@ -30,6 +32,7 @@ def _no_store(response: Response) -> None:
 
 
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(_no_store)])
+preferences_router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(_no_store)])
 
 DbSession = Annotated[Session, Depends(get_db)]
 Store = Annotated[SessionStore, Depends(get_session_store)]
@@ -84,4 +87,23 @@ def me(current: Current) -> MeResponse:
             last_activity_at=current.last_activity_at,
             expires_in=SESSION_TTL_SECONDS,
         ),
+    )
+
+
+@preferences_router.get("/me/preferences", response_model=UserPreferencesOut)
+def get_preferences(current: Current) -> UserPreferencesOut:
+    return UserPreferencesOut(
+        main_currency=current.user.main_currency.value,
+        email_notifications=current.user.email_notifications,
+    )
+
+
+@preferences_router.patch("/me/preferences", response_model=UserPreferencesOut)
+def update_preferences(
+    data: UserPreferencesUpdate, db: DbSession, current: Current
+) -> UserPreferencesOut:
+    user = service.update_email_notification_preference(db, current.user, data.email_notifications)
+    return UserPreferencesOut(
+        main_currency=user.main_currency.value,
+        email_notifications=user.email_notifications,
     )

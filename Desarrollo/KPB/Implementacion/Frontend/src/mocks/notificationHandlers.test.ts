@@ -19,6 +19,7 @@ async function postExpense(amount: string) {
       transaction_date: new Date().toISOString().slice(0, 10),
       wallet_id: 'wallet-cash-default',
       category_id: 'category-health',
+      category_source: 'manual',
     }),
   });
 }

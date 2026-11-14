@@ -1,7 +1,7 @@
 export interface ApiErrorDetail {
   field: string;
-  issue?: string;
   message?: string;
+  issue?: string;
 }
 
 export class ApiError extends Error {

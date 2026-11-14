@@ -60,8 +60,33 @@ class BudgetOut(BaseModel):
     thresholds: list[ThresholdOut]
 
 
+class BudgetWithoutCapOut(BaseModel):
+    """Categoría disponible que todavía no tiene un presupuesto activo.
+
+    ``GET /budgets`` es un catálogo de categorías de gasto con su presupuesto
+    vigente, no únicamente una lista de filas de ``budgets``.  Al no existir un
+    tope tampoco hay moneda ni periodo con los que calcular un consumo
+    comparable, por eso esos campos son nulos y el avance es 0 %.
+    """
+
+    id: None = None
+    category: BudgetCategory
+    currency: None = None
+    amount: None = None
+    period_type: None = None
+    start_date: None = None
+    period_days: None = None
+    period_start: None = None
+    period_end: None = None
+    consumed: None = None
+    remaining: None = None
+    percentage: float = 0.0
+    status: Literal["NONE"] = "NONE"
+    thresholds: list[ThresholdOut] = []
+
+
 class BudgetList(BaseModel):
-    data: list[BudgetOut]
+    data: list[BudgetOut | BudgetWithoutCapOut]
 
 
 class BudgetImpact(BaseModel):

@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.entities import (
@@ -86,6 +86,35 @@ def list_budgets(
     if category_id is not None:
         stmt = stmt.where(Budget.category_id == category_id)
     return list(db.execute(stmt).scalars().all())
+
+
+def list_categories_with_active_budget(
+    db: Session,
+    user_id: uuid.UUID,
+    category_id: uuid.UUID | None,
+) -> list[tuple[Category, Budget | None]]:
+    """Devuelve todo el catálogo propio y, cuando exista, su tope vigente.
+
+    El filtro del presupuesto activo es parte del ``ON`` del LEFT JOIN.  Si se
+    colocara en ``WHERE``, las categorías sin presupuesto desaparecerían y se
+    rompería el contrato de GET /budgets.
+    """
+    stmt = (
+        select(Category, Budget)
+        .outerjoin(
+            Budget,
+            and_(
+                Budget.category_id == Category.category_id,
+                Budget.user_id == user_id,
+                Budget.status == BudgetStatus.ACTIVO,
+            ),
+        )
+        .where(Category.user_id == user_id)
+        .order_by(Category.name.asc(), Budget.created_at.desc(), Budget.budget_id)
+    )
+    if category_id is not None:
+        stmt = stmt.where(Category.category_id == category_id)
+    return list(db.execute(stmt).all())
 
 
 def get_category(db: Session, user_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:

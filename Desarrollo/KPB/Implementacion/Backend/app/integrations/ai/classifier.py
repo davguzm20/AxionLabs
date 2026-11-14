@@ -15,6 +15,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
+from unicodedata import normalize
 
 from app.config import get_ai_settings
 from app.core.errors import AppError
@@ -194,11 +195,8 @@ class CategoryClassifier:
                     merchant=merchant,
                     candidates=candidates,
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Fallo llamada a OpenAI en clasificación, recurriendo a heurística: %s",
-                    exc,
-                )
+            except Exception:
+                logger.warning("OpenAI no disponible para clasificación; se usa heurística local.")
 
         # Fallback determinista con reglas heurísticas
         return self._classify_with_heuristics(
@@ -220,7 +218,8 @@ class CategoryClassifier:
 
         client = OpenAI(
             api_key=self._settings.openai_api_key,
-            timeout=self._settings.openai_timeout_seconds,
+            timeout=10.0,
+            max_retries=0,
         )
 
         user_content = (
@@ -233,6 +232,7 @@ class CategoryClassifier:
         response = client.chat.completions.create(
             model=self._settings.openai_text_model,
             temperature=0.0,
+            max_tokens=150,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -269,12 +269,17 @@ class CategoryClassifier:
         candidates: list[dict[str, Any]],
     ) -> ClassificationResult:
         """Aplica análisis semántico por expresiones regulares sobre el texto."""
-        full_text = f"{concept} {merchant or ''}".lower()
+        # "menú" y "menu" deben coincidir con las mismas reglas.
+        full_text = normalize("NFKD", f"{concept} {merchant or ''}").encode(
+            "ascii", "ignore"
+        ).decode().lower()
         norm_type = category_type.strip().upper()
 
         # Mapa de candidatos por nombre en minúsculas
         cand_by_name: dict[str, dict[str, Any]] = {
-            c["name"].strip().lower(): c for c in candidates
+            c["name"].strip().lower(): c
+            for c in candidates
+            if str(c.get("type", "")).upper() == norm_type
         }
 
         # Evaluamos las reglas heurísticas

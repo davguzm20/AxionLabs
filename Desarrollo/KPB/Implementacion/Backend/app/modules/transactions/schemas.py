@@ -87,6 +87,32 @@ class TransactionOut(BaseModel):
     created_at: str
 
 
+class TransactionPageMeta(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class TransactionHistoryList(BaseModel):
+    data: list[TransactionOut]
+    meta: TransactionPageMeta
+
+
+class CurrencySummary(BaseModel):
+    currency: str
+    income: str
+    expense: str
+    net: str
+
+
+class TransactionHistorySummary(BaseModel):
+    date_from: str
+    date_to: str
+    count: int
+    by_currency: list[CurrencySummary]
+
+
 class TextTransactionResponse(BaseModel):
     """Respuesta HTTP 201 devuelta al registrar una transacción por texto."""
 
@@ -111,6 +137,16 @@ class ExtractedReceiptData(BaseModel):
     ruc: str | None = Field(default=None, description="RUC del emisor si fue identificado (11 dígitos)")
     transaction_date: str | None = Field(default=None, description="Fecha de emisión YYYY-MM-DD")
     category: CategoryInfo | None = Field(default=None, description="Categoría tentativa asignada")
+
+
+class TextPreviewResponse(BaseModel):
+    """Vista previa de texto: se confirma después mediante POST /transactions."""
+
+    preview_id: uuid.UUID
+    wallet_id: uuid.UUID
+    extracted: ExtractedReceiptData
+    confidence: float
+    requires_confirmation: bool = True
 
 
 class ReceiptPreviewResponse(BaseModel):
@@ -166,3 +202,41 @@ class VoiceConfirmRequest(BaseModel):
     transaction_date: date
     category_id: uuid.UUID
     wallet_id: uuid.UUID
+
+
+# =============================================================================
+# Schemas de consulta paginada y resumen de totales
+# =============================================================================
+
+class PaginationMeta(BaseModel):
+    """Metadatos de paginación para listados."""
+
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class TransactionListResponse(BaseModel):
+    """Respuesta HTTP 200 de GET /transactions con historial paginado."""
+
+    data: list[TransactionOut]
+    meta: PaginationMeta
+
+
+class CurrencySummary(BaseModel):
+    """Totales de ingresos, egresos y saldo neto en una moneda específica."""
+
+    currency: str
+    income: str
+    expense: str
+    net: str
+
+
+class TransactionSummaryResponse(BaseModel):
+    """Respuesta HTTP 200 de GET /transactions/summary con totales por moneda."""
+
+    date_from: str | None = None
+    date_to: str | None = None
+    count: int
+    by_currency: list[CurrencySummary]

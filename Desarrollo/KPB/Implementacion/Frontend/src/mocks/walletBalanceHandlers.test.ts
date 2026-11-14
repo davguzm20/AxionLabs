@@ -24,6 +24,7 @@ async function saveTransaction(input: { type: 'INCOME' | 'EXPENSE'; amount: stri
       transaction_date: new Date().toISOString().slice(0, 10),
       wallet_id: bcpWalletId,
       category_id: input.categoryId,
+      category_source: 'manual',
     }),
   });
 }
@@ -58,6 +59,7 @@ describe('saldo de monedero al guardar movimientos', () => {
         transaction_date: new Date().toISOString().slice(0, 10),
         wallet_id: bcpWalletId,
         category_id: 'category-freelance',
+        category_source: 'manual',
       }),
     });
 

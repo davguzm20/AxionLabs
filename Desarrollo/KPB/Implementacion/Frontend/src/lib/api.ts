@@ -49,7 +49,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       payload?.error?.message || payload?.message || 'No se pudo completar la solicitud. Inténtalo nuevamente.',
       response.status,
       payload?.error?.code,
-      payload?.error?.details,
+      payload?.error?.details?.map((detail) => ({
+        field: detail.field,
+        issue: detail.issue,
+        message: detail.message ?? detail.issue ?? 'Valor inválido.',
+      })),
       payload?.error?.trace_id,
     );
   }

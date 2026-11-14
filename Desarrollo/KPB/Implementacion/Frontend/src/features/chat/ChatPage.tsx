@@ -126,8 +126,11 @@ export function ChatPage() {
     } catch (error) {
       const apiError = error as ApiError;
       const isMissingAmount = apiError.code === 'AMOUNT_NOT_DETECTED';
-      const message = isMissingAmount
-        ? 'No pude identificar el monto. \u00bfCu\u00e1nto fue el gasto/ingreso?'
+      const isGreeting = apiError.code === 'GREETING_ONLY';
+      const message = isGreeting
+        ? '¡Hola! Soy KhipuBot. ¿Qué gasto o ingreso quieres registrar hoy?'
+        : isMissingAmount
+          ? 'No pude identificar el monto. ¿Cuánto fue el gasto o ingreso?'
         : apiError.code === 'NLP_UNAVAILABLE'
           ? apiError.message || 'El servicio no est\u00e1 disponible. Por favor intente nuevamente'
           : apiError.message || 'No pude registrar la transacci\u00f3n. Int\u00e9ntalo nuevamente.';
@@ -136,7 +139,7 @@ export function ChatPage() {
         kind: 'bubble',
         author: 'bot',
         text: message,
-        botMood: 'sad',
+        botMood: isGreeting ? 'happy' : 'sad',
       }]);
       if (apiError.code === 'NLP_UNAVAILABLE') setRetryText(value);
     } finally {
