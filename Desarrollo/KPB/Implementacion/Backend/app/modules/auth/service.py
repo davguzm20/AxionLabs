@@ -160,3 +160,13 @@ def _register_failure(
 
 def logout(store: SessionStore, user_id: uuid.UUID, sid: str) -> None:
     store.delete(sid, user_id)
+
+
+def update_email_notification_preference(
+    db: Session, user: User, email_notifications: bool
+) -> User:
+    """Actualiza la preferencia persistente del usuario autenticado."""
+    user.email_notifications = email_notifications
+    db.commit()
+    db.refresh(user)
+    return user

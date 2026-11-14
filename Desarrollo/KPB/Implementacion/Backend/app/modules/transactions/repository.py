@@ -6,11 +6,14 @@ Realiza las consultas a PostgreSQL sobre las tablas wallets, categories y transa
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from typing import Literal
 
-from app.entities import Category, Transaction, Wallet
+from sqlalchemy import Date, case, cast, func, select
+from sqlalchemy.orm import Session, joinedload
+
+from app.entities import Category, Transaction, TransactionType, Wallet
 
 
 def get_wallet(
@@ -100,6 +103,91 @@ def get_transaction_by_id(
         Transaction.user_id == user_id,
     )
     return db.execute(stmt).scalars().first()
+
+
+def _history_filters(
+    user_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    transaction_type: Literal["EXPENSE", "INCOME"] | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    q: str | None = None,
+) -> list[object]:
+    filters: list[object] = [
+        Transaction.user_id == user_id,
+        cast(Transaction.transacted_at, Date) >= date_from,
+        cast(Transaction.transacted_at, Date) <= date_to,
+    ]
+    if transaction_type is not None:
+        filters.append(
+            Transaction.type
+            == (TransactionType.INGRESO if transaction_type == "INCOME" else TransactionType.GASTO)
+        )
+    if category_id is not None:
+        filters.append(Transaction.category_id == category_id)
+    if wallet_id is not None:
+        filters.append(Transaction.wallet_id == wallet_id)
+    if q:
+        filters.append(Transaction.concept.ilike(f"%{q}%"))
+    return filters
+
+
+def page_history(
+    db: Session,
+    user_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    page: int,
+    page_size: int,
+    transaction_type: Literal["EXPENSE", "INCOME"] | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    q: str | None = None,
+) -> tuple[list[Transaction], int]:
+    filters = _history_filters(
+        user_id, date_from, date_to, transaction_type, category_id, wallet_id, q
+    )
+    total = db.execute(
+        select(func.count()).select_from(Transaction).where(*filters)
+    ).scalar_one()
+    statement = (
+        select(Transaction)
+        .options(joinedload(Transaction.category))
+        .where(*filters)
+        .order_by(Transaction.transacted_at.desc(), Transaction.transaction_id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list(db.execute(statement).scalars().all()), total
+
+
+def summarize_history(
+    db: Session,
+    user_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    transaction_type: Literal["EXPENSE", "INCOME"] | None = None,
+    category_id: uuid.UUID | None = None,
+    wallet_id: uuid.UUID | None = None,
+    q: str | None = None,
+) -> list[tuple[object, Decimal, Decimal]]:
+    filters = _history_filters(
+        user_id, date_from, date_to, transaction_type, category_id, wallet_id, q
+    )
+    income = func.coalesce(
+        func.sum(case((Transaction.type == TransactionType.INGRESO, Transaction.amount), else_=0)), 0
+    )
+    expense = func.coalesce(
+        func.sum(case((Transaction.type == TransactionType.GASTO, Transaction.amount), else_=0)), 0
+    )
+    statement = (
+        select(Transaction.currency, income, expense)
+        .where(*filters)
+        .group_by(Transaction.currency)
+        .order_by(Transaction.currency)
+    )
+    return list(db.execute(statement).all())
 
 
 def save_transaction_and_update_balance(

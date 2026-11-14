@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -57,3 +58,12 @@ class SessionOut(BaseModel):
 class MeResponse(BaseModel):
     user: UserOut
     session: SessionOut
+
+
+class UserPreferencesOut(BaseModel):
+    main_currency: Literal["PEN", "USD"]
+    email_notifications: bool
+
+
+class UserPreferencesUpdate(BaseModel):
+    email_notifications: bool

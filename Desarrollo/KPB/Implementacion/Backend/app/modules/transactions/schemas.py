@@ -87,6 +87,32 @@ class TransactionOut(BaseModel):
     created_at: str
 
 
+class TransactionPageMeta(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class TransactionHistoryList(BaseModel):
+    data: list[TransactionOut]
+    meta: TransactionPageMeta
+
+
+class CurrencySummary(BaseModel):
+    currency: str
+    income: str
+    expense: str
+    net: str
+
+
+class TransactionHistorySummary(BaseModel):
+    date_from: str
+    date_to: str
+    count: int
+    by_currency: list[CurrencySummary]
+
+
 class TextTransactionResponse(BaseModel):
     """Respuesta HTTP 201 devuelta al registrar una transacción por texto."""
 

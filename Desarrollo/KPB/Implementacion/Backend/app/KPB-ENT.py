@@ -243,6 +243,15 @@ class User(Base):
         default=UserStatus.ACTIVO,
         server_default=text("'ACTIVO'"),
     )
+    main_currency: Mapped[Currency] = mapped_column(
+        _pg_enum(Currency, "currency_enum"),
+        nullable=False,
+        default=Currency.PEN,
+        server_default=text("'PEN'"),
+    )
+    email_notifications: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 
