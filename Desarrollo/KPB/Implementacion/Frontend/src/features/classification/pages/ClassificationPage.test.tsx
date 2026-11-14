@@ -24,7 +24,7 @@ describe('CU05 — clasificación automática', () => {
     const request = vi.fn();
     server.use(
       http.get('*/api/v1/categories', () => HttpResponse.json({ data: categories })),
-      http.post('*/api/v1/categories/suggestions', async ({ request: req }) => {
+      http.post('*/api/v1/categories/suggest', async ({ request: req }) => {
         request(await req.json());
         return HttpResponse.json({
           category: { id: 'food', name: 'Alimentación', type: 'EXPENSE', icon: 'circle-help' },
@@ -51,7 +51,7 @@ describe('CU05 — clasificación automática', () => {
   it('usa Otros como fallback revisable cuando falla NLP', async () => {
     server.use(
       http.get('*/api/v1/categories', () => HttpResponse.json({ data: categories })),
-      http.post('*/api/v1/categories/suggestions', () => HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'NLP no disponible.' } }, { status: 503 })),
+      http.post('*/api/v1/categories/suggest', () => HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'NLP no disponible.' } }, { status: 503 })),
     );
 
     renderWithTestRouter(<ClassificationPage />);
@@ -65,7 +65,7 @@ describe('CU05 — clasificación automática', () => {
   it('marca is_fallback=true en el resultado de classification cuando falla NLP', async () => {
     server.use(
       http.get('*/api/v1/categories', () => HttpResponse.json({ data: categories })),
-      http.post('*/api/v1/categories/suggestions', () => HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'NLP no disponible.' } }, { status: 503 })),
+      http.post('*/api/v1/categories/suggest', () => HttpResponse.json({ error: { code: 'NLP_UNAVAILABLE', message: 'NLP no disponible.' } }, { status: 503 })),
     );
 
     const { result } = renderHook(() => useClassification());
@@ -76,7 +76,7 @@ describe('CU05 — clasificación automática', () => {
   it('conserva la categoría fallback si el NLP responde con un id que no está en el catálogo', async () => {
     server.use(
       http.get('*/api/v1/categories', () => HttpResponse.json({ data: categories })),
-      http.post('*/api/v1/categories/suggestions', () => HttpResponse.json({
+      http.post('*/api/v1/categories/suggest', () => HttpResponse.json({
         category: { id: 'unknown', name: 'Categoría desconocida', type: 'EXPENSE', icon: 'circle-help' },
         confidence: 0.8,
         reason: 'Respuesta fuera del catálogo.',
@@ -96,7 +96,7 @@ describe('CU05 — clasificación automática', () => {
       .mockImplementation(() => HttpResponse.json({ data: categories }));
     server.use(
       http.get('*/api/v1/categories', () => categoriesRequest()),
-      http.post('*/api/v1/categories/suggestions', () => HttpResponse.json({
+      http.post('*/api/v1/categories/suggest', () => HttpResponse.json({
         category: { id: 'food', name: 'Alimentación', type: 'EXPENSE', icon: 'circle-help' },
         confidence: 0.9, reason: 'ok', needs_review: false,
       })),

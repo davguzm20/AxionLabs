@@ -534,7 +534,7 @@ export const handlers = [
     const start = (page - 1) * pageSize;
     return HttpResponse.json({
       data: filtered.slice(start, start + pageSize),
-      pagination: { page, page_size: pageSize, total_items: filtered.length, total_pages: Math.ceil(filtered.length / pageSize) },
+      meta: { page, page_size: pageSize, total: filtered.length, pages: Math.ceil(filtered.length / pageSize) },
     });
   }),
   http.get('*/transactions/:id', ({ params, request }) => {
@@ -674,7 +674,16 @@ export const handlers = [
       notification.read_at = new Date().toISOString();
     }
     if (cu08Notification) cu08Notification.read = true;
-    return new HttpResponse(null, { status: 204 });
+    return HttpResponse.json(notification ?? {
+      id: notificationId,
+      type: 'BUDGET_ALERT',
+      title: cu08Notification?.message ?? 'Alerta de presupuesto',
+      body: cu08Notification?.message ?? 'Alerta de presupuesto',
+      status: 'READ',
+      alert_id: notificationId,
+      created_at: cu08Notification?.created_at ?? new Date().toISOString(),
+      read_at: new Date().toISOString(),
+    });
   }),
   http.get('*/api/v1/budgets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
@@ -1002,7 +1011,7 @@ export const handlers = [
     savedWallets.forEach((item) => { item.is_default = item.id === wallet.id; });
     return HttpResponse.json(walletResponse(wallet));
   }),
-  http.post('*/api/v1/categories/suggestions', async ({ request }) => {
+  http.post('*/api/v1/categories/suggest', async ({ request }) => {
     const body = await request.json() as { type?: TransactionType; concept?: string };
     const type = body.type ?? 'EXPENSE';
     const category = findSuggestedCategory(type, body.concept ?? '');
@@ -1149,6 +1158,7 @@ export const handlers = [
         wallet: { id: wallet.id, balance: wallet.balance },
         category: { id: category.id, spent_month: spentInMonth(category.id, transactionDate) },
       },
+      alerts,
       budget_alert: mockAlert ? {
         notification_id: mockAlert.notification_id,
         category: mockAlert.category,

@@ -61,7 +61,7 @@ describe('HistoryPage', () => {
         if (filters.q && !transaction.concept.toLocaleLowerCase('es-PE').includes(filters.q.toLocaleLowerCase('es-PE'))) return false;
         return true;
       });
-      return { data: filtered.slice((page - 1) * 20, page * 20), pagination: { page, page_size: 20, total_items: filtered.length, total_pages: Math.ceil(filtered.length / 20) } };
+      return { data: filtered.slice((page - 1) * 20, page * 20), meta: { page, page_size: 20, total: filtered.length, pages: Math.ceil(filtered.length / 20) } };
     });
     historyMocks.getTransactionSummary.mockImplementation(async (filters: HistoryFilters) => {
       const filtered = transactions.filter((transaction) => transaction.transaction_date >= filters.date_from && transaction.transaction_date <= filters.date_to && (!filters.type || transaction.type === filters.type));
