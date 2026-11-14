@@ -2,14 +2,10 @@ import { ApiError } from './errors';
 
 export { ApiError } from './errors';
 
-<<<<<<< HEAD
 export const API_BASE_URL = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/$/, '');
-=======
-const apiBaseUrl = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
->>>>>>> caebe09528c7c132d63934ec4c8ca07dfcf9226a
 
 export function buildApiUrl(path: string): string {
-  return apiBaseUrl + path;
+  return API_BASE_URL + path;
 }
 
 export function createApiHeaders(headers?: HeadersInit): Headers {
@@ -19,6 +15,11 @@ export function createApiHeaders(headers?: HeadersInit): Headers {
     requestHeaders.set('Authorization', 'Bearer ' + accessToken);
   }
   return requestHeaders;
+}
+
+export async function apiRaw(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = createApiHeaders(init.headers);
+  return fetch(buildApiUrl(path), { ...init, headers });
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -34,16 +35,22 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) return undefined as T;
 
   const payload = await response.json().catch(() => undefined) as {
-    error?: { message?: string; code?: string; details?: { field: string; message: string }[] };
+    error?: { message?: string; code?: string; details?: { field: string; issue?: string; message?: string }[]; trace_id?: string };
     message?: string;
   } | undefined;
 
   if (!response.ok) {
+    if (payload?.error?.code === 'SESSION_EXPIRED'
+      && headers.has('Authorization')
+      && !/\/auth\/(?:login|logout)(?:\?|$)/u.test(buildApiUrl(path))) {
+      window.dispatchEvent(new CustomEvent('khipubot:session-expired', { detail: { message: payload.error.message } }));
+    }
     throw new ApiError(
       payload?.error?.message || payload?.message || 'No se pudo completar la solicitud. Inténtalo nuevamente.',
       response.status,
       payload?.error?.code,
       payload?.error?.details,
+      payload?.error?.trace_id,
     );
   }
 

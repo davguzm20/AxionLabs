@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
-import { api } from '../../lib/api';
 import type { ApiError } from '../../lib/errors';
+import { requestPasswordRecovery, resetPassword, verifyPasswordRecoveryCode } from './authService';
 
 const resetSchema = z.object({
   code: z.string().regex(/^\d{6}$/u, 'Ingresa el código de 6 dígitos.'),
@@ -21,7 +21,8 @@ type ResetValues = z.infer<typeof resetSchema>;
 export function ResetPasswordPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const email = (location.state as { email?: string } | null)?.email;
+  const routeState = location.state as { recovery_id?: string; email?: string } | null;
+  const [recoveryId, setRecoveryId] = useState(routeState?.recovery_id);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(60);
@@ -38,16 +39,15 @@ export function ResetPasswordPage() {
     return () => window.clearTimeout(timer);
   }, [cooldown]);
 
-  if (!email) return <Navigate to="/recuperar-password" replace />;
+  if (!recoveryId) return <Navigate to="/recuperar-password" replace />;
 
   async function onSubmit(values: ResetValues) {
+    if (!recoveryId) return;
     setLoading(true);
     setErrorMessage(undefined);
     try {
-      await api('/auth/reset-password', {
-        method: 'POST',
-        body: JSON.stringify({ email, ...values }),
-      });
+      const verification = await verifyPasswordRecoveryCode(recoveryId, values.code);
+      await resetPassword(verification.reset_token, values.new_password, values.confirm_password);
       setSuccess(true);
       window.setTimeout(() => navigate('/login', { replace: true, state: { message: 'Contraseña actualizada. Inicia sesión con tu nueva contraseña.' } }), 1200);
     } catch (error) {
@@ -70,7 +70,10 @@ export function ResetPasswordPage() {
     setResending(true);
     setErrorMessage(undefined);
     try {
-      await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+      const email = (location.state as { email?: string } | null)?.email ?? '';
+      const response = await requestPasswordRecovery(email);
+      setRecoveryId(response.recovery_id);
+      navigate('/reset-password', { replace: true, state: { recovery_id: response.recovery_id, email } });
       setCooldown(60);
     } catch (error) {
       setErrorMessage((error as ApiError).message || 'El servicio no está disponible. Intenta más tarde.');
