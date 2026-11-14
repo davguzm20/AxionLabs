@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.errors import register_error_handlers
 from app.modules.auth.router import router as auth_router
@@ -10,6 +11,21 @@ app = FastAPI(
     version="0.1.0",
 )
 app.openapi_version = "3.0.3"
+
+# ==========================================
+# (Configuración de CORS)
+# ==========================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# ==========================================
 
 # Registro de manejadores de error globales de la API
 register_error_handlers(app)
