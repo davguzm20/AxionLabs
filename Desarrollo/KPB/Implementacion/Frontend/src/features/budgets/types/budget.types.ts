@@ -80,5 +80,4 @@ export interface BudgetUpdatePayload {
   period_type: BudgetPeriodType;
   start_date: string | null;
   period_days: number | null;
-  thresholds?: number[];
 }

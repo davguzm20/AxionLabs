@@ -6,12 +6,12 @@ vi.mock('./browser', () => ({ worker: { start } }));
 beforeEach(() => start.mockClear());
 afterEach(() => vi.unstubAllEnvs());
 
-describe('inicio de MSW en el navegador', () => {
-  it('activa y espera los mocks por defecto en desarrollo', async () => {
+describe('MSW en el navegador', () => {
+  it('no inicia mocks en desarrollo: la aplicación consume la API configurada', async () => {
     vi.stubEnv('DEV', true); vi.stubEnv('VITE_USE_MOCKS', undefined);
-    await enableMocking(); expect(start).toHaveBeenCalledOnce();
+    await enableMocking(); expect(start).not.toHaveBeenCalled();
   });
-  it('permite desactivar expresamente los mocks', async () => {
+  it('permanece inactivo aunque la variable de mocks esté configurada', async () => {
     vi.stubEnv('DEV', true); vi.stubEnv('VITE_USE_MOCKS', 'false');
     await enableMocking(); expect(start).not.toHaveBeenCalled();
   });

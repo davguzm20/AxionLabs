@@ -7,6 +7,7 @@ import {
   listBudgets,
   listBudgetCategories,
   reactivateBudget,
+  replaceBudgetThresholds,
   updateBudget,
 } from '../services/budgetService';
 import type {
@@ -42,7 +43,9 @@ export function useBudgets(status: BudgetStatus = 'ACTIVE') {
     mutationFn: async ({ budgetId, createPayload, updatePayload, thresholds }) => {
       if (!budgetId) return createBudget(createPayload);
 
-      return updateBudget(budgetId, { ...updatePayload, thresholds });
+      await updateBudget(budgetId, updatePayload);
+      await replaceBudgetThresholds(budgetId, thresholds);
+      return getBudget(budgetId);
     },
     onSettled: async (_data, _error, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['budgets'] });

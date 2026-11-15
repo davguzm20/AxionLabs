@@ -1,6 +1,8 @@
-/** Se espera al worker antes de permitir que la interfaz solicite datos. */
+/**
+ * Los mocks de MSW se ejecutan exclusivamente mediante el servidor de Node
+ * configurado en Vitest. La aplicación del navegador siempre consume la API
+ * configurada, incluso durante el desarrollo.
+ */
 export async function enableMocking(): Promise<void> {
-  if (!import.meta.env.DEV || import.meta.env.VITE_USE_MOCKS === 'false') return;
-  const { worker } = await import('./browser');
-  await worker.start({ onUnhandledRequest: 'bypass' });
+  // Punto de extensión deliberadamente inactivo: no registrar un Service Worker.
 }
