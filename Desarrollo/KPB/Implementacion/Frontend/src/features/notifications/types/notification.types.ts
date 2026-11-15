@@ -9,6 +9,13 @@ export interface UserNotification {
   alert_id: string | null;
   created_at: string;
   read_at: string | null;
+  budget_id?: string;
+  category?: { id: string; name: string };
+  priority?: 'normal' | 'high';
+  threshold_percentage?: number;
+  usage_percentage?: number;
+  remaining?: string;
+  currency?: 'PEN' | 'USD';
 }
 
 export interface NotificationListResponse {

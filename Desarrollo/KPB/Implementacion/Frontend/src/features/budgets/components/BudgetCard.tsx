@@ -54,7 +54,8 @@ function getRestartLabel(periodEnd: string): string {
 }
 
 function getProgressState(percentage: number): { label: string; color: string } {
-  if (percentage >= 100) return { label: 'Te pasaste', color: 'bg-danger-600' };
+  if (percentage > 100) return { label: 'Te pasaste', color: 'bg-danger-600' };
+  if (percentage === 100) return { label: 'Alcanzaste el tope', color: 'bg-danger-600' };
   if (percentage >= 80) return { label: 'Estás cerca del tope', color: 'bg-warning-500' };
   return { label: 'Vas bien', color: 'bg-brand-500' };
 }

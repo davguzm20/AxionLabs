@@ -18,8 +18,6 @@ const BUDGET_CATEGORY_CATALOG: ReadonlyArray<CategoryCreatePayload> = [
   { name: 'Salud', type: 'EXPENSE' },
   { name: 'Ocio', type: 'EXPENSE' },
   { name: 'Otros', type: 'EXPENSE' },
-  { name: 'Sueldo', type: 'INCOME' },
-  { name: 'Inversiones', type: 'INCOME' },
 ];
 
 const formSchema = z.object({
@@ -129,7 +127,8 @@ export function BudgetFormPage() {
       id: existing?.id ?? `catalog:${catalogCategory.name}`,
       icon: existing?.icon ?? 'tag',
     };
-  });
+  }).concat(categories.filter((category) => !BUDGET_CATEGORY_CATALOG.some((item) => item.name === category.name))
+    .map((category) => ({ ...category, type: 'EXPENSE' as const })));
   const selectedCategory = categoryOptions.find((category) => category.id === values.category_id) ?? budget?.category;
   const budgetCategoryIsListed = budget ? categoryOptions.some((category) => category.id === budget.category.id) : true;
   const normalizedAmount = normalizeMoney(values.amount) ?? '0.00';
@@ -205,7 +204,10 @@ export function BudgetFormPage() {
         thresholds: formValues.thresholds,
       };
       await save({ budgetId, createPayload, updatePayload, thresholds: formValues.thresholds });
-      navigate('/presupuestos', { replace: true });
+      navigate('/presupuestos', {
+        replace: true,
+        state: { budgetNotice: isEditing ? 'Tope de gasto actualizado correctamente.' : 'Tope de gasto establecido correctamente.' },
+      });
     } catch (cause) {
       if (cause instanceof ApiError && cause.details) {
         for (const detail of cause.details) {

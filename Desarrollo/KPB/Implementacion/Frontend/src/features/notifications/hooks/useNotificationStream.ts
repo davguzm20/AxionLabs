@@ -17,7 +17,12 @@ export function useNotificationStream() {
     const controller = new AbortController();
     void consumeNotificationStream(controller.signal, () => {
       void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
-    }, setStatus);
+    }, (nextStatus) => {
+      setStatus(nextStatus);
+      if (nextStatus === 'connected') {
+        void queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
+      }
+    });
     return () => controller.abort();
   }, [queryClient]);
 

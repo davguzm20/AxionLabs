@@ -25,7 +25,9 @@ export async function getBudget(id: string, signal?: AbortSignal): Promise<Budge
 export async function listBudgetCategories(signal?: AbortSignal): Promise<Category[]> {
   const response = await api<CategoryListResponse | Category[]>('/categories', { signal });
   const categories = Array.isArray(response) ? response : response.data;
-  return categories.filter((category) => category.status !== 'INACTIVE');
+  return categories
+    .filter((category) => category.status !== 'INACTIVE' && category.type?.toUpperCase() === 'EXPENSE')
+    .map((category) => ({ ...category, type: 'EXPENSE' as const }));
 }
 
 export async function createBudgetCategory(payload: CategoryCreatePayload): Promise<Category> {
