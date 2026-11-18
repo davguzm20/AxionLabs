@@ -110,6 +110,9 @@ def test_text_preview_replies_to_a_pure_greeting_without_calling_ai(engine, monk
 def test_text_extraction_route_is_registered() -> None:
     from fastapi.testclient import TestClient
 
+    from app.database import get_db
+    from app.integrations.redis.sessions import get_session_store
+    from app.modules.auth.deps import get_jwt_secret
     from app.modules.transactions.router import extractions_router
     from app.main import app
 
@@ -118,5 +121,13 @@ def test_text_extraction_route_is_registered() -> None:
         for route in extractions_router.routes
     )
     # Una solicitud sin sesión debe llegar al guard de autenticación, no a 404.
-    response = TestClient(app).post("/api/v1/extractions/text", json={"text": "menú 20"})
+    app.dependency_overrides[get_db] = lambda: None
+    app.dependency_overrides[get_session_store] = lambda: None
+    app.dependency_overrides[get_jwt_secret] = lambda: "x" * 32
+    try:
+        response = TestClient(app).post(
+            "/api/v1/extractions/text", json={"text": "menú 20"}
+        )
+    finally:
+        app.dependency_overrides.clear()
     assert response.status_code == 401
