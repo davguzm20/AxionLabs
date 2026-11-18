@@ -31,6 +31,7 @@ export function useBudgets(status: BudgetStatus = 'ACTIVE') {
   const budgetsQuery = useQuery({
     queryKey: ['budgets', status],
     queryFn: ({ signal }) => listBudgets(status, signal),
+    refetchInterval: 4_000,
   });
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
@@ -48,6 +49,7 @@ export function useBudgets(status: BudgetStatus = 'ACTIVE') {
     },
     onSettled: async (_data, _error, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['budgets'] });
+      await queryClient.invalidateQueries({ queryKey: ['notifications'] });
       if (variables.budgetId) {
         await queryClient.invalidateQueries({ queryKey: ['budget', variables.budgetId] });
       }

@@ -1,6 +1,6 @@
 import { ArrowLeft, Info, Plus, X } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { BudgetCard } from '../components/BudgetCard';
 import { useBudgets } from '../hooks/useBudgets';
 import type { Budget } from '../types/budget.types';
@@ -15,10 +15,12 @@ function getCurrentMonthLabel(): string {
 
 export function BudgetsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [status, setStatus] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   const [showInfo, setShowInfo] = useState(true);
   const [actionError, setActionError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
+  const [notice, setNotice] = useState<string | undefined>(() =>
+    (location.state as { budgetNotice?: string } | null)?.budgetNotice ?? '');
   const {
     budgets,
     isLoading,

@@ -1,6 +1,17 @@
 import { http, HttpResponse } from 'msw';
 import type { Wallet } from '../features/wallets/types/wallet.types';
 import type { Budget, BudgetCreatePayload, BudgetPeriodType, BudgetStatus, BudgetThreshold, Currency } from '../features/budgets/types/budget.types';
+import type { UserNotification } from '../features/notifications/types/notification.types';
+import { budgetToday, getCurrentBudgetPeriod, validBudgetDate } from './budgetPeriods';
+
+function readStored<T>(key: string, fallback: T): T {
+  try {
+    const value = typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+    return value ? JSON.parse(value) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 type TransactionType = 'EXPENSE' | 'INCOME';
 type MockCategory = { id: string; name: string; type: TransactionType; icon: string; source?: string; status?: 'ACTIVE' | 'INACTIVE' };
@@ -17,23 +28,14 @@ type MockTransaction = {
   needs_review?: boolean;
   created_at?: string;
 };
-type MockNotification = {
-  id: string;
-  type: 'BUDGET_ALERT';
-  title: string;
-  body: string;
-  status: 'UNREAD' | 'READ';
-  alert_id: string | null;
-  created_at: string;
-  read_at: string | null;
-};
+type MockNotification = UserNotification & { spent_month?: string; monthly_limit?: string };
 type NotificationEvent = {
-  event: 'budget_alert';
+  event: 'alert.created' | 'notification.read';
   id: string;
   data: Record<string, unknown>;
 };
 
-const categoryCatalog: MockCategory[] = [
+const categorySeeds: MockCategory[] = [
   { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', type: 'EXPENSE', icon: 'utensils' },
   { id: 'category-transport', name: 'Transporte', type: 'EXPENSE', icon: 'bus' },
   { id: 'category-health', name: 'Salud', type: 'EXPENSE', icon: 'heart-pulse' },
@@ -45,14 +47,15 @@ const categoryCatalog: MockCategory[] = [
   { id: 'category-friends', name: 'Salidas con amigos', type: 'EXPENSE', icon: 'users' },
   { id: 'category-subscriptions', name: 'Suscripciones', type: 'EXPENSE', icon: 'tv' },
 ];
+const categoryCatalog = readStored<MockCategory[]>('mock_categories_v1', categorySeeds.map((category) => ({ ...category })));
 
-const savedTransactions = new Map<string, MockTransaction>();
+const savedTransactions = new Map<string, MockTransaction>(readStored<MockTransaction[]>('mock_transactions_v1', createSeedTransactions()).map((transaction) => [transaction.id, transaction]));
 const savedTextResponses = new Map<string, unknown>();
 const savedTransactionResponses = new Map<string, unknown>();
 let transactionPostCallCount = 0;
 const recoveryIds = new Set<string>();
 const resetTokens = new Set<string>();
-let savedNotifications: MockNotification[] = [];
+let savedNotifications = readStored<MockNotification[]>('mock_notifications_v1', []);
 let savedPreferences = { main_currency: 'PEN' as const, email_notifications: true };
 const notificationSubscribers = new Set<(event: NotificationEvent) => void>();
 const mockWalletSeeds: Wallet[] = [
@@ -74,7 +77,6 @@ const mockWalletSeeds: Wallet[] = [
   },
 ];
 const savedWallets: Wallet[] = mockWalletSeeds.map((wallet) => ({ ...wallet }));
-const MOCK_TODAY = new Date();
 const mockBudgetSeeds = [
   {
     id: 'budget-food', categoryId: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', currency: 'PEN' as const, amount: '250.00', consumed: '0.00', periodType: 'MONTHLY' as const, thresholds: [80, 100],
@@ -90,43 +92,6 @@ const mockBudgetSeeds = [
 function centsToMoney(cents: bigint): string {
   const absolute = cents < 0n ? -cents : cents;
   return `${cents < 0n ? '-' : ''}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, '0')}`;
-}
-
-function dateToString(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getCurrentBudgetPeriod(periodType: BudgetPeriodType, startDate: string | null, periodDays: number | null) {
-  if (periodType === 'WEEKLY') {
-    const start = new Date(MOCK_TODAY);
-    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
-    return { period_start: dateToString(start), period_end: dateToString(end) };
-  }
-
-  if (periodType === 'MONTHLY') {
-    const start = new Date(MOCK_TODAY.getFullYear(), MOCK_TODAY.getMonth(), 1, 12);
-    const end = new Date(MOCK_TODAY.getFullYear(), MOCK_TODAY.getMonth() + 1, 0, 12);
-    return { period_start: dateToString(start), period_end: dateToString(end) };
-  }
-
-  const days = periodDays ?? 1;
-  const origin = startDate ? new Date(`${startDate}T12:00:00`) : new Date(MOCK_TODAY);
-  if (MOCK_TODAY < origin) {
-    const end = new Date(origin);
-    end.setDate(end.getDate() + days - 1);
-    return { period_start: dateToString(origin), period_end: dateToString(end) };
-  }
-  const elapsedDays = Math.floor((MOCK_TODAY.getTime() - origin.getTime()) / 86_400_000);
-  const start = new Date(origin);
-  start.setDate(start.getDate() + Math.floor(elapsedDays / days) * days);
-  const end = new Date(start);
-  end.setDate(end.getDate() + days - 1);
-  return { period_start: dateToString(start), period_end: dateToString(end) };
 }
 
 function makeBudget(input: {
@@ -176,7 +141,7 @@ function createSeedBudgets(): Budget[] {
     thresholds: seed.thresholds.map((percentage) => ({
       id: `${seed.id}-threshold-${percentage}`,
       percentage,
-      triggered: amountToCents(seed.consumed) * 100n >= amountToCents(seed.amount) * BigInt(percentage),
+      triggered: false,
     })),
   }));
 }
@@ -199,25 +164,25 @@ function persistMockBudgets() {
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(MOCK_BUDGETS_STORAGE_KEY, JSON.stringify(savedBudgets));
+    localStorage.setItem('mock_transactions_v1', JSON.stringify([...savedTransactions.values()]));
+    localStorage.setItem('mock_notifications_v1', JSON.stringify(savedNotifications));
+    localStorage.setItem('mock_budget_alerts_v1', JSON.stringify([...firedBudgetAlerts]));
+    localStorage.setItem('mock_categories_v1', JSON.stringify(categoryCatalog));
   } catch {
     // Storage can be unavailable in private browsing or restricted environments.
   }
 }
 
 let savedBudgets = loadMockBudgets();
-const today = () => new Date().toISOString().slice(0, 10);
+const firedBudgetAlerts = new Set<string>(readStored('mock_budget_alerts_v1', savedBudgets.flatMap((budget) =>
+  budget.thresholds.filter((threshold) => threshold.triggered).map((threshold) => budgetAlertKey(budget, threshold.percentage)))));
+const today = () => budgetToday();
 const hasSession = (request: Request) => request.headers.get('Authorization')?.startsWith('Bearer ') ?? false;
 
-function shiftDate(value: Date, days: number): string {
-  const date = new Date(value);
-  date.setDate(date.getDate() + days);
-  return dateToString(date);
-}
-
 function createSeedTransactions(): MockTransaction[] {
-  const now = new Date();
-  const todayDate = dateToString(now);
-  const yesterday = now.getDate() === 1 ? todayDate : shiftDate(now, -1);
+  const todayDate = budgetToday();
+  const yesterday = todayDate.endsWith('-01') ? todayDate
+    : new Date(Date.parse(`${todayDate}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
   const createdAt = (date: string, time: string) => `${date}T${time}:00-05:00`;
   const seed = (
     id: string,
@@ -256,20 +221,19 @@ function resetSavedTransactions() {
   for (const transaction of createSeedTransactions()) savedTransactions.set(transaction.id, transaction);
 }
 
-resetSavedTransactions();
-
 export function resetBudgetMocks() {
+  categoryCatalog.splice(0, categoryCatalog.length, ...categorySeeds.map((category) => ({ ...category })));
+  firedBudgetAlerts.clear();
+  resetSavedTransactions();
   savedBudgets = createSeedBudgets();
-  persistMockBudgets();
   savedTextResponses.clear();
   savedTransactionResponses.clear();
   transactionPostCallCount = 0;
-  resetCu08ThresholdConfigs();
-  resetSavedTransactions();
   resetWalletMocks();
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
-  resetCu08Notifications();
+  savedBudgets.forEach(synchronizeBudget);
+  persistMockBudgets();
 }
 
 export function resetWalletMocks(wallets: Wallet[] = mockWalletSeeds) {
@@ -279,7 +243,7 @@ export function resetWalletMocks(wallets: Wallet[] = mockWalletSeeds) {
 export function resetNotificationMocks() {
   savedNotifications = [];
   savedPreferences = { main_currency: 'PEN', email_notifications: true };
-  resetCu08Notifications();
+  persistMockBudgets();
 }
 
 function publishNotificationEvent(event: NotificationEvent) {
@@ -337,6 +301,24 @@ function updateWalletBalance(wallet: Wallet, type: TransactionType, amount: stri
   const transactionCents = amountToCents(amount);
   const signedCents = type === 'INCOME' ? transactionCents : -transactionCents;
   wallet.balance = centsToMoney(amountToCents(wallet.balance) + signedCents);
+  persistMockBudgets();
+}
+
+function budgetAlertKey(budget: Budget, percentage: number): string {
+  return `${budget.id}:${budget.period_type}:${budget.period_start}:${budget.period_end}:${percentage}`;
+}
+
+function synchronizeBudget(budget: Budget) {
+  Object.assign(budget, getCurrentBudgetPeriod(budget.period_type, budget.start_date, budget.period_days));
+  const consumed = [...savedTransactions.values()].filter((transaction) => transaction.type === 'EXPENSE'
+    && transaction.category.id === budget.category.id && transaction.currency === budget.currency
+    && transaction.transaction_date >= budget.period_start && transaction.transaction_date <= budget.period_end)
+    .reduce((sum, transaction) => sum + amountToCents(transaction.amount), 0n);
+  const limit = amountToCents(budget.amount);
+  budget.consumed = centsToMoney(consumed);
+  budget.remaining = centsToMoney(limit - consumed);
+  budget.percentage = limit === 0n ? 0 : Number(consumed * 1_000n / limit) / 10;
+  budget.thresholds.forEach((threshold) => { threshold.triggered = firedBudgetAlerts.has(budgetAlertKey(budget, threshold.percentage)); });
 }
 
 function isValidBudgetAmount(value: string): boolean {
@@ -361,7 +343,8 @@ function formatMockMoney(cents: bigint, currency: string): string {
   return `${currency === 'PEN' ? 'S/' : '$'} ${centsToMoney(cents)}`;
 }
 
-function evaluateMockBudgetAlerts(input: {
+function evaluateMockBudgetAlerts(input?: {
+  budgetId?: string;
   categoryId: string;
   currency: string;
   amountCents: bigint;
@@ -376,6 +359,7 @@ function evaluateMockBudgetAlerts(input: {
   notification_id: string;
   category: { id: string; name: string };
   remaining: string;
+  currency: Currency;
 }> {
   const alerts: Array<{
     id: string;
@@ -387,35 +371,41 @@ function evaluateMockBudgetAlerts(input: {
     notification_id: string;
     category: { id: string; name: string };
     remaining: string;
+    currency: Currency;
   }> = [];
 
   for (const budget of savedBudgets) {
-    if (budget.status !== 'ACTIVE' || budget.category.id !== input.categoryId || budget.currency !== input.currency) continue;
-    if (input.transactionDate < budget.period_start || input.transactionDate > budget.period_end) continue;
+    synchronizeBudget(budget);
+    if (budget.status !== 'ACTIVE') continue;
+    if (input && ((input.budgetId && budget.id !== input.budgetId) || budget.category.id !== input.categoryId || budget.currency !== input.currency
+      || input.transactionDate < budget.period_start || input.transactionDate > budget.period_end)) continue;
 
     const amountCents = amountToCents(budget.amount);
-    const consumedCents = amountToCents(budget.consumed) + input.amountCents;
-    budget.consumed = centsToMoney(consumedCents);
-    budget.remaining = centsToMoney(amountCents - consumedCents);
-    budget.percentage = amountCents === 0n ? 0 : Number((consumedCents * 1_000n) / amountCents) / 10;
+    const consumedCents = amountToCents(budget.consumed);
 
     const crossedThresholds = budget.thresholds
       .filter((threshold) => !threshold.triggered
         && consumedCents * 100n >= amountCents * BigInt(threshold.percentage))
       .sort((left, right) => left.percentage - right.percentage);
-    crossedThresholds.forEach((threshold) => { threshold.triggered = true; });
+    crossedThresholds.forEach((threshold) => {
+      threshold.triggered = true;
+      firedBudgetAlerts.add(budgetAlertKey(budget, threshold.percentage));
+    });
     const crossed = crossedThresholds.slice(-1);
+    // EX2: un sobregiro siempre avisa, aunque el usuario no haya configurado 100%.
+    if (consumedCents > amountCents && !firedBudgetAlerts.has(budgetAlertKey(budget, 100))) {
+      crossed.splice(0, crossed.length, { id: `${budget.id}-overrun`, percentage: 100, triggered: true });
+    }
 
     for (const threshold of crossed) {
+      firedBudgetAlerts.add(budgetAlertKey(budget, threshold.percentage));
       const remainingCents = amountCents - consumedCents;
+      const usagePercentage = Number((consumedCents * 1_000n) / amountCents) / 10;
+      const priority = consumedCents > amountCents || threshold.percentage === 100 ? 'high' : 'normal';
       const title = threshold.percentage === 100 && remainingCents >= 0n
         ? `Alcanzaste el 100% de tu presupuesto de ${budget.category.name}.`
         : `Cruzaste el ${threshold.percentage}% de tu presupuesto de ${budget.category.name}.`;
-      const body = remainingCents < 0n
-        ? `Superaste tu tope en ${budget.category.name}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
-        : threshold.percentage === 100
-          ? `Límite: ${formatMockMoney(amountCents, budget.currency)}. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}.`
-          : `Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}. Te quedan ${formatMockMoney(remainingCents, budget.currency)}.`;
+      const body = `${remainingCents < 0n ? `Superaste tu tope en ${budget.category.name}. ` : ''}Consumo: ${usagePercentage}%. Gastado: ${formatMockMoney(consumedCents, budget.currency)} de ${formatMockMoney(amountCents, budget.currency)}. Saldo disponible: ${formatMockMoney(remainingCents, budget.currency)}.${priority === 'high' ? ' Revisa tus movimientos recientes o replantea tu presupuesto.' : ''}`;
       const alertId = crypto.randomUUID();
       const notification: MockNotification = {
         id: crypto.randomUUID(),
@@ -426,10 +416,17 @@ function evaluateMockBudgetAlerts(input: {
         alert_id: alertId,
         created_at: new Date().toISOString(),
         read_at: null,
+        budget_id: budget.id,
+        category: { id: budget.category.id, name: budget.category.name },
+        priority,
+        threshold_percentage: threshold.percentage,
+        usage_percentage: usagePercentage,
+        remaining: centsToMoney(remainingCents),
+        currency: budget.currency,
+        spent_month: budget.consumed,
+        monthly_limit: budget.amount,
       };
       savedNotifications.unshift(notification);
-      const priority = threshold.percentage === 100 ? 'high' : 'normal';
-      const usagePercentage = Number((consumedCents * 1_000n) / amountCents) / 10;
       alerts.push({
         id: alertId,
         title,
@@ -440,9 +437,10 @@ function evaluateMockBudgetAlerts(input: {
         notification_id: notification.id,
         category: { id: budget.category.id, name: budget.category.name },
         remaining: centsToMoney(remainingCents),
+        currency: budget.currency,
       });
       publishNotificationEvent({
-        event: 'budget_alert',
+        event: 'alert.created',
         id: alertId,
         data: {
           id: alertId,
@@ -464,6 +462,13 @@ function evaluateMockBudgetAlerts(input: {
   return alerts;
 }
 
+savedBudgets.forEach(synchronizeBudget);
+
+function evaluateBudgetConfiguration(budget: Budget) {
+  return evaluateMockBudgetAlerts({ budgetId: budget.id, categoryId: budget.category.id,
+    currency: budget.currency, transactionDate: today(), amountCents: 0n });
+}
+
 function findSuggestedCategory(type: TransactionType, concept: string): MockCategory {
   const normalized = concept.toLocaleLowerCase('es-PE');
   const patterns = type === 'INCOME'
@@ -481,6 +486,20 @@ export const handlers = [
   http.get('*/api/v1/categories', () => HttpResponse.json(
     categoryCatalog.map(({ id, name, type, icon }) => ({ id, name, type, icon })),
   )),
+  http.post('*/api/v1/categories', async ({ request }) => {
+    if (!hasSession(request)) return sessionExpired();
+    const body = await request.json() as { name?: string; type?: string };
+    const name = body.name?.trim();
+    if (!name || name.length > 100 || !['EXPENSE', 'INCOME'].includes(body.type ?? '')) {
+      return mockErrorResponse(422, 'INVALID_CATEGORY', 'Indica un nombre y un tipo de categoría válidos.');
+    }
+    const existing = categoryCatalog.find((category) => category.name.toLocaleLowerCase('es-PE') === name.toLocaleLowerCase('es-PE') && category.type === body.type);
+    if (existing) return HttpResponse.json(existing);
+    const category: MockCategory = { id: crypto.randomUUID(), name, type: body.type as TransactionType, icon: 'tag', status: 'ACTIVE' };
+    categoryCatalog.push(category);
+    persistMockBudgets();
+    return HttpResponse.json(category, { status: 201 });
+  }),
   http.get('*/transactions/summary', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
     const query = new URL(request.url).searchParams;
@@ -586,6 +605,7 @@ export const handlers = [
           clearInterval(heartbeat);
           notificationSubscribers.delete(send);
           request.signal.removeEventListener('abort', close);
+          try { controller.close(); } catch { /* El consumidor puede haber cerrado el canal. */ }
         };
         cleanup = close;
         notificationSubscribers.add(send);
@@ -609,23 +629,15 @@ export const handlers = [
     const url = new URL(request.url);
     const usesCu08Format = url.searchParams.has('type') || url.searchParams.has('unread');
     if (usesCu08Format) {
-      if (!liveNotificationAdded && Date.now() - mockStartedAt >= 10_000) {
-        liveNotificationAdded = true;
-        mockCu08Notifications.unshift({
-          id: 'notif-live-food-90', type: 'budget_alert', priority: 'normal',
-          category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación' }, threshold_percentage: 90,
-          usage_percentage: 91.2, spent_month: '456.00', monthly_limit: '500.00', remaining: '44.00',
-          message: 'Llegaste al 90% de tu tope en Alimentación. Gastaste S/ 456.00 de S/ 500.00.',
-          read: false, created_at: new Date().toISOString(),
-        });
-      }
       const unread = url.searchParams.get('unread');
       const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1);
       const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('page_size') ?? 20) || 20));
-      const filtered = mockCu08Notifications.filter((item) =>
-        (!url.searchParams.has('type') || item.type === url.searchParams.get('type'))
-        && (unread === null || item.read === (unread !== 'true')),
-      );
+      const filtered = savedNotifications.filter((item) =>
+        (!url.searchParams.has('type') || url.searchParams.get('type') === 'budget_alert')
+        && (unread === null || (item.status === 'UNREAD') === (unread === 'true')),
+      ).map((item) => ({
+        ...item, type: 'budget_alert', message: item.body, read: item.status === 'READ',
+      }));
       const offset = (page - 1) * pageSize;
       return HttpResponse.json({
         data: filtered.slice(offset, offset + pageSize),
@@ -658,32 +670,23 @@ export const handlers = [
       if (notification.status !== 'UNREAD') continue;
       notification.status = 'READ';
       notification.read_at = readAt;
-      const cu08Notification = mockCu08Notifications.find((item) => item.id === notification.id);
-      if (cu08Notification) cu08Notification.read = true;
+      publishNotificationEvent({ event: 'notification.read', id: notification.id, data: { id: notification.id } });
     }
+    persistMockBudgets();
     return HttpResponse.json({ message: 'Notificaciones marcadas como leídas.' });
   }),
   http.patch('*/api/v1/notifications/:notificationId/read', ({ params, request }) => {
     if (!hasSession(request)) return sessionExpired();
     const notificationId = String(params.notificationId);
     const notification = savedNotifications.find((item) => item.id === notificationId);
-    const cu08Notification = mockCu08Notifications.find((item) => item.id === notificationId);
-    if (!notification && !cu08Notification) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos esta notificación.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
+    if (!notification) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos esta notificación.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
     if (notification?.status === 'UNREAD') {
       notification.status = 'READ';
       notification.read_at = new Date().toISOString();
+      publishNotificationEvent({ event: 'notification.read', id: notification.id, data: { id: notification.id } });
     }
-    if (cu08Notification) cu08Notification.read = true;
-    return HttpResponse.json(notification ?? {
-      id: notificationId,
-      type: 'BUDGET_ALERT',
-      title: cu08Notification?.message ?? 'Alerta de presupuesto',
-      body: cu08Notification?.message ?? 'Alerta de presupuesto',
-      status: 'READ',
-      alert_id: notificationId,
-      created_at: cu08Notification?.created_at ?? new Date().toISOString(),
-      read_at: new Date().toISOString(),
-    });
+    persistMockBudgets();
+    return HttpResponse.json(notification);
   }),
   http.get('*/api/v1/budgets', ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
@@ -693,10 +696,18 @@ export const handlers = [
       return HttpResponse.json({ error: { code: 'INVALID_STATUS', message: 'Selecciona un estado válido.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
     }
     const categoryId = url.searchParams.get('category_id');
+    savedBudgets.forEach(synchronizeBudget);
+    persistMockBudgets();
     const data = savedBudgets
       .filter((budget) => budget.status === status && (!categoryId || budget.category.id === categoryId))
       .map((budget) => ({ ...budget, category: { ...budget.category }, thresholds: toThresholds(budget) }));
-    return HttpResponse.json({ data });
+    const withoutCap = status === 'ACTIVE' ? categoryCatalog.filter((category) => category.type === 'EXPENSE'
+      && category.status !== 'INACTIVE' && (!categoryId || category.id === categoryId)
+      && !hasActiveBudgetForCategory(category.id)).map((category) => ({
+        id: null, category, currency: null, amount: null, period_type: null, start_date: null, period_days: null,
+        period_start: null, period_end: null, consumed: null, remaining: null, percentage: 0, status: 'NONE', thresholds: [],
+      })) : [];
+    return HttpResponse.json({ data: [...data, ...withoutCap] });
   }),
   http.post('*/api/v1/budgets', async ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
@@ -724,7 +735,7 @@ export const handlers = [
     if (body.period_type !== 'WEEKLY' && body.period_type !== 'MONTHLY' && body.period_type !== 'CUSTOM') {
       return HttpResponse.json({ error: { code: 'INVALID_PERIOD', message: 'Selecciona un periodo válido.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
     }
-    if (body.period_type === 'CUSTOM' && (typeof body.start_date !== 'string' || !body.start_date || body.period_days === null || body.period_days === undefined)) {
+    if (body.period_type === 'CUSTOM' && (typeof body.start_date !== 'string' || !validBudgetDate(body.start_date) || body.period_days === null || body.period_days === undefined)) {
       return HttpResponse.json({ error: { code: 'CUSTOM_PERIOD_REQUIRED', message: 'Indica fecha de inicio y días.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
     }
     if (body.period_type === 'CUSTOM' && (!Number.isInteger(body.period_days) || Number(body.period_days) < 1 || Number(body.period_days) > 366)) {
@@ -754,13 +765,14 @@ export const handlers = [
       })),
     });
     savedBudgets.push(budget);
-    persistMockBudgets();
+    evaluateBudgetConfiguration(budget);
     return HttpResponse.json(budget, { status: 201 });
   }),
   http.get('*/api/v1/budgets/:budgetId/thresholds', ({ params, request }) => {
     if (!hasSession(request)) return sessionExpired();
     const budget = findBudget(String(params.budgetId));
     if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
+    synchronizeBudget(budget);
     return HttpResponse.json({ data: toThresholds(budget) });
   }),
   http.put('*/api/v1/budgets/:budgetId/thresholds', async ({ params, request }) => {
@@ -777,9 +789,9 @@ export const handlers = [
     budget.thresholds = values.map((percentage) => ({
       id: budget.thresholds.find((threshold) => threshold.percentage === percentage)?.id ?? crypto.randomUUID(),
       percentage,
-      triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
+      triggered: firedBudgetAlerts.has(budgetAlertKey(budget, percentage)),
     }));
-    persistMockBudgets();
+    evaluateBudgetConfiguration(budget);
     return HttpResponse.json({ data: toThresholds(budget) });
   }),
   http.post('*/api/v1/budgets/:budgetId/thresholds', async ({ params, request }) => {
@@ -797,10 +809,10 @@ export const handlers = [
     const threshold: BudgetThreshold = {
       id: crypto.randomUUID(),
       percentage,
-      triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
+      triggered: firedBudgetAlerts.has(budgetAlertKey(budget, percentage)),
     };
     budget.thresholds.push(threshold);
-    persistMockBudgets();
+    evaluateBudgetConfiguration(budget);
     return HttpResponse.json(threshold, { status: 201 });
   }),
   http.delete('*/api/v1/budgets/:budgetId/thresholds/:thresholdId', ({ params, request }) => {
@@ -822,6 +834,8 @@ export const handlers = [
     if (!hasSession(request)) return sessionExpired();
     const budget = findBudget(String(params.budgetId));
     if (!budget) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No encontramos este presupuesto.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
+    synchronizeBudget(budget);
+    persistMockBudgets();
     return HttpResponse.json({ ...budget, category: { ...budget.category }, thresholds: toThresholds(budget) });
   }),
   http.patch('*/api/v1/budgets/:budgetId', async ({ params, request }) => {
@@ -857,11 +871,16 @@ export const handlers = [
     }
     const startDate = periodType === 'CUSTOM' ? body.start_date ?? budget.start_date : null;
     const periodDays = periodType === 'CUSTOM' ? body.period_days ?? budget.period_days : null;
-    if (periodType === 'CUSTOM' && (!startDate || !periodDays)) {
+    if (periodType === 'CUSTOM' && (!startDate || !validBudgetDate(startDate) || !periodDays)) {
       return HttpResponse.json({ error: { code: 'CUSTOM_PERIOD_REQUIRED', message: 'Indica fecha de inicio y días.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
     }
     if (periodType === 'CUSTOM' && (!Number.isInteger(periodDays) || Number(periodDays) < 1 || Number(periodDays) > 366)) {
       return HttpResponse.json({ error: { code: 'INVALID_PERIOD_DAYS', message: 'Los días deben estar entre 1 y 366.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
+    }
+    if (body.thresholds !== undefined && (!Array.isArray(body.thresholds) || body.thresholds.length === 0
+      || body.thresholds.some((value) => !Number.isInteger(value) || value < 1 || value > 100)
+      || new Set(body.thresholds).size !== body.thresholds.length)) {
+      return mockErrorResponse(422, 'INVALID_THRESHOLD', 'Ingresa porcentajes únicos entre 1% y 100%.');
     }
     Object.assign(budget, makeBudget({
       id: budget.id,
@@ -873,9 +892,12 @@ export const handlers = [
       startDate,
       periodDays,
       status: nextStatus,
-      thresholds: budget.thresholds,
+      thresholds: body.thresholds?.map((percentage) => ({
+        id: budget.thresholds.find((threshold) => threshold.percentage === percentage)?.id ?? crypto.randomUUID(),
+        percentage, triggered: false,
+      })) ?? budget.thresholds,
     }));
-    persistMockBudgets();
+    evaluateBudgetConfiguration(budget);
     return HttpResponse.json(budget);
   }),
   http.delete('*/api/v1/budgets/:budgetId', ({ params, request }) => {
@@ -1165,6 +1187,7 @@ export const handlers = [
         threshold_percentage: mockAlert.threshold_percentage,
         usage_percentage: mockAlert.usage_percentage,
         remaining: mockAlert.remaining,
+        currency: mockAlert.currency,
         priority: mockAlert.priority,
         message: mockAlert.message,
       } : null,
@@ -1192,6 +1215,7 @@ export const handlers = [
       source: 'MANUAL',
     };
     savedTransactions.set(transactionId, updatedTransaction);
+    evaluateMockBudgetAlerts();
     return HttpResponse.json(updatedTransaction);
   }),
   http.post('*/api/v1/transactions/voice', async ({ request }) => {
@@ -1403,74 +1427,6 @@ export const handlers = [
   }),
 ];
 
-type MockCu08Notification = {
-  id: string;
-  type: string;
-  priority: 'normal' | 'high';
-  category: { id: string; name: string };
-  threshold_percentage: number;
-  usage_percentage: number;
-  spent_month: string;
-  monthly_limit: string;
-  remaining: string;
-  message: string;
-  read: boolean;
-  created_at: string;
-};
-
-const thresholdConfigs = new Map(savedBudgets.map((budget) => [budget.category.id, {
-  thresholds: budget.thresholds.map((threshold) => threshold.percentage), channels: ['app'], is_default: true,
-}]));
-const mockStartedAt = Date.now();
-let liveNotificationAdded = false;
-const mockCu08Notifications: MockCu08Notification[] = [
-  {
-    id: 'notif-food-75', type: 'budget_alert', priority: 'normal',
-    category: { id: 'cat-food', name: 'Alimentación' }, threshold_percentage: 75,
-    usage_percentage: 82.16, spent_month: '410.80', monthly_limit: '500.00', remaining: '89.20',
-    message: 'Llegaste al 75% de tu tope en Alimentación. Gastaste S/ 410.80 de S/ 500.00.',
-    read: false, created_at: new Date(mockStartedAt - 4 * 60_000).toISOString(),
-  },
-  {
-    id: 'notif-transport-100', type: 'budget_alert', priority: 'high',
-    category: { id: 'cat-transport', name: 'Transporte' }, threshold_percentage: 100,
-    usage_percentage: 105.25, spent_month: '84.20', monthly_limit: '80.00', remaining: '-4.20',
-    message: 'Superaste el 100% de tu tope en Transporte. Gastaste S/ 84.20 de S/ 80.00.',
-    read: false, created_at: new Date(mockStartedAt - 20 * 60_000).toISOString(),
-  },
-];
-
-function resetCu08ThresholdConfigs() {
-  thresholdConfigs.clear();
-  for (const budget of savedBudgets) {
-    thresholdConfigs.set(budget.category.id, {
-      thresholds: budget.thresholds.map((threshold) => threshold.percentage),
-      channels: ['app'],
-      is_default: true,
-    });
-  }
-}
-
-function resetCu08Notifications() {
-  mockCu08Notifications.splice(0, mockCu08Notifications.length,
-    {
-      id: 'notif-food-75', type: 'budget_alert', priority: 'normal',
-      category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación' }, threshold_percentage: 75,
-      usage_percentage: 82.16, spent_month: '410.80', monthly_limit: '500.00', remaining: '89.20',
-      message: 'Llegaste al 75% de tu tope en Alimentación. Gastaste S/ 410.80 de S/ 500.00.',
-      read: false, created_at: new Date(mockStartedAt - 4 * 60_000).toISOString(),
-    },
-    {
-      id: 'notif-transport-100', type: 'budget_alert', priority: 'high',
-      category: { id: 'category-transport', name: 'Transporte' }, threshold_percentage: 100,
-      usage_percentage: 105.25, spent_month: '84.20', monthly_limit: '80.00', remaining: '-4.20',
-      message: 'Superaste el 100% de tu tope en Transporte. Gastaste S/ 84.20 de S/ 80.00.',
-      read: false, created_at: new Date(mockStartedAt - 20 * 60_000).toISOString(),
-    },
-  );
-  liveNotificationAdded = false;
-}
-
 handlers.unshift(
   http.post('*/api/v1/transactions/text', async ({ request }) => {
     if (!hasSession(request)) return sessionExpired();
@@ -1548,38 +1504,36 @@ handlers.unshift(
     savedTextResponses.set(idempotencyKey, responseBody);
     return HttpResponse.json(responseBody, { status: 201 });
   }),
-  http.get('*/api/v1/budgets/:categoryId/alert-thresholds', ({ params }) => {
+  http.get('*/api/v1/budgets/:categoryId/alert-thresholds', ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
     const categoryId = String(params.categoryId);
-    const budget = savedBudgets.find((item) => item.category.id === categoryId);
-    const config = thresholdConfigs.get(categoryId) ?? (budget ? {
-      thresholds: budget.thresholds.map((threshold) => threshold.percentage), channels: ['app'], is_default: true,
-    } : undefined);
-    if (!config) return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
-    return HttpResponse.json({ category_id: categoryId, ...config });
+    const budget = savedBudgets.find((item) => item.category.id === categoryId && item.status === 'ACTIVE');
+    if (!budget) return mockErrorResponse(404, 'NOT_FOUND', 'No se encontró el presupuesto.');
+    return HttpResponse.json({ category_id: categoryId, thresholds: budget.thresholds.map((threshold) => threshold.percentage), channels: savedPreferences.email_notifications ? ['app', 'email'] : ['app'], is_default: false });
   }),
   http.put('*/api/v1/budgets/:categoryId/alert-thresholds', async ({ params, request }) => {
+    if (!hasSession(request)) return sessionExpired();
     const categoryId = String(params.categoryId);
-    const budget = savedBudgets.find((item) => item.category.id === categoryId);
+    const budget = savedBudgets.find((item) => item.category.id === categoryId && item.status === 'ACTIVE');
     if (!budget) {
       return HttpResponse.json({ error: { code: 'NOT_FOUND', message: 'No se encontró el presupuesto.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 404 });
     }
     const body = await request.json() as { thresholds?: number[]; channels?: string[] };
     const thresholds = body.thresholds;
-    if (!thresholds || thresholds.length < 1 || thresholds.length > 5 || thresholds.some((value) => !Number.isInteger(value) || value < 1 || value > 100) || new Set(thresholds).size !== thresholds.length) {
-      return HttpResponse.json({ error: { code: 'INVALID_THRESHOLD', message: 'Configura entre uno y cinco porcentajes enteros del 1 al 100.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
+    if (!Array.isArray(thresholds) || thresholds.length < 1 || thresholds.some((value) => !Number.isInteger(value) || value < 1 || value > 100) || new Set(thresholds).size !== thresholds.length) {
+      return mockErrorResponse(422, 'INVALID_THRESHOLD', 'Ingresa porcentajes únicos entre 1% y 100%.');
     }
     const channels = body.channels ?? ['app'];
     if (channels.some((channel) => !['app', 'email'].includes(channel))) {
       return HttpResponse.json({ error: { code: 'INVALID_CHANNEL', message: 'Selecciona canales válidos.', details: [], trace_id: 'req_' + crypto.randomUUID()} }, { status: 422 });
     }
     const config = { thresholds, channels, is_default: false };
-    thresholdConfigs.set(categoryId, config);
     budget.thresholds = thresholds.map((percentage) => ({
       id: budget.thresholds.find((threshold) => threshold.percentage === percentage)?.id ?? crypto.randomUUID(),
       percentage,
-      triggered: amountToCents(budget.consumed) * 100n >= amountToCents(budget.amount) * BigInt(percentage),
+      triggered: firedBudgetAlerts.has(budgetAlertKey(budget, percentage)),
     }));
-    persistMockBudgets();
+    evaluateBudgetConfiguration(budget);
     return HttpResponse.json({ category_id: categoryId, ...config });
   }),
 );

@@ -19,6 +19,7 @@ export type BudgetAlert = {
   threshold_percentage?: number;
   usage_percentage?: number;
   remaining?: string;
+  currency?: 'PEN' | 'USD';
 };
 
 export type LegacyBudgetAlert = BudgetAlert & {

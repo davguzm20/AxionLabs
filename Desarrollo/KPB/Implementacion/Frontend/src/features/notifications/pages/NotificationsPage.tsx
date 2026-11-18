@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { ArrowLeft, Bell, CheckCheck } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Bell, CheckCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useNotifications, useUnreadNotificationCount } from '../hooks/useNotifications';
 import { useNotificationStreamStatus } from '../hooks/useNotificationStream';
 import type { NotificationStatus, UserNotification } from '../types/notification.types';
+import { formatMoney } from '../../budgets/utils/money';
 
 type Filter = 'ALL' | 'UNREAD';
 
@@ -30,12 +31,16 @@ function NotificationItem({
   disabled: boolean;
 }) {
   const unread = notification.status === 'UNREAD';
+  const Icon = notification.priority === 'high' ? AlertTriangle : Bell;
   return (
     <li className={`flex items-start gap-3 rounded-xl border bg-white p-4 shadow-sm ${unread ? 'border-brand-200' : 'border-ink-200'}`}>
-      <Bell aria-hidden="true" className="mt-0.5 shrink-0 text-brand-600" size={20} />
+      <Icon aria-hidden="true" className={`mt-0.5 shrink-0 ${notification.priority === 'high' ? 'text-danger-600' : 'text-brand-600'}`} size={20} />
       <div className="min-w-0 flex-1">
         <h2 className="font-semibold text-ink-900">{notification.title}</h2>
         <p className="mt-1 text-sm leading-5 text-ink-700">{notification.body}</p>
+        {notification.usage_percentage !== undefined && <p className="mt-2 text-sm text-ink-700">Consumo: {notification.usage_percentage}% del tope.</p>}
+        {notification.remaining !== undefined && <p className="text-sm text-ink-700">Saldo disponible: {formatMoney(notification.remaining, notification.currency ?? 'PEN')}</p>}
+        {notification.priority === 'high' && <div className="mt-2 text-sm text-danger-600"><p>Prioridad alta. Revisa tus movimientos o replantea tu presupuesto.</p><Link to="/historial" className="inline-flex min-h-11 items-center underline">Ver movimientos</Link><Link to="/presupuestos" className="ml-4 inline-flex min-h-11 items-center underline">Ver presupuesto</Link></div>}
         <div className="mt-3 flex items-center justify-between gap-3 text-xs text-ink-500">
           <time dateTime={notification.created_at}>{formatRelativeDate(notification.created_at)}</time>
           {unread ? <span className="font-medium text-brand-700">No leída</span> : <span>Leída</span>}

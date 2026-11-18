@@ -33,7 +33,7 @@ describe('BudgetFormPage', () => {
     const category = await screen.findByLabelText('Categoría');
     expect(within(category).getAllByRole('option').map((option) => option.textContent)).toEqual([
       'Selecciona una categoría', 'Alimentación', 'Transporte', 'Servicios', 'Salud',
-      'Ocio', 'Otros', 'Sueldo', 'Inversiones',
+      'Ocio', 'Otros',
     ]);
     await user.selectOptions(category, 'catalog:Servicios');
     await user.type(screen.getByLabelText('Tope del periodo'), '100');

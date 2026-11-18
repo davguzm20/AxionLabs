@@ -13,6 +13,7 @@ export function useNotifications(status?: NotificationStatus, page = 1) {
   const query = useQuery({
     queryKey: [...notificationsQueryKey, status ?? 'ALL', page],
     queryFn: ({ signal }) => listNotifications({ status, page }, signal),
+    refetchInterval: 4_000,
   });
 
   const markRead = useMutation({
@@ -43,6 +44,7 @@ export function useUnreadNotificationCount() {
   return useQuery({
     queryKey: [...notificationsQueryKey, 'UNREAD', 'count'],
     queryFn: ({ signal }) => listNotifications({ status: 'UNREAD', page: 1, pageSize: 1 }, signal),
+    refetchInterval: 4_000,
     select: (response) => response.meta.total,
   });
 }
