@@ -348,6 +348,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "email-validator" },
+    { name = "fakeredis" },
     { name = "fastapi" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
@@ -360,7 +361,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "fakeredis" },
     { name = "httpx2" },
     { name = "pytest" },
 ]
@@ -369,6 +369,7 @@ dev = [
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "email-validator", specifier = ">=2.2" },
+    { name = "fakeredis", specifier = ">=2.26" },
     { name = "fastapi", specifier = ">=0.156" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic-settings", specifier = ">=2.6" },
@@ -381,7 +382,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "fakeredis", specifier = ">=2.26" },
     { name = "httpx2", specifier = ">=2.15" },
     { name = "pytest", specifier = ">=9.1" },
 ]

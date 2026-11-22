@@ -2,6 +2,10 @@ import os
 import uuid
 from datetime import UTC, datetime
 
+# Se ejecuta antes de importar la aplicacion: las pruebas nunca leen la clave real
+# del .env. El adaptador de vision reconoce "mock" y no abre conexiones externas.
+os.environ["OPENAI_API_KEY"] = "mock"
+
 import fakeredis
 import pytest
 from fastapi.testclient import TestClient
