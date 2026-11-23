@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
+from app.config import get_settings
 from app.core.errors import register_error_handlers
 from app.modules.alerts.router import router as thresholds_router
 from app.modules.auth.router import preferences_router, router as auth_router
@@ -75,8 +76,9 @@ app.openapi_version = "3.0.3"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+        origin.strip()
+        for origin in get_settings().cors_origins.split(",")
+        if origin.strip()
     ],
     allow_credentials=True,
     allow_methods=["*"],

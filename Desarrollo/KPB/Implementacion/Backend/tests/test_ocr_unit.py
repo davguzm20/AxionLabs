@@ -8,6 +8,7 @@ previa temporal y la persistencia de la transacción con ``source_type = OCR``.
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,7 +111,23 @@ def test_mock_vision_extracts_receipt_fields(monkeypatch) -> None:
 
 
 def test_receipt_preview_returns_extracted_data(api) -> None:
-    response = api.post(URL, files={"image": ("boleta.jpg", JPEG, "image/jpeg")})
+    mocked_receipt = vision.ExtractedReceipt(
+        amount=Decimal("45.90"),
+        currency="PEN",
+        merchant="Supermercado Metro",
+        ruc="20100055237",
+        transaction_date=datetime.now(UTC).date(),
+        concept="Supermercado Metro",
+        ocr_text="TOTAL S/ 45.90",
+        confidence=0.88,
+    )
+    with patch(
+        "app.modules.transactions.service.extract_receipt_from_image",
+        return_value=mocked_receipt,
+    ) as extract_receipt:
+        response = api.post(URL, files={"image": ("boleta.jpg", JPEG, "image/jpeg")})
+
+    extract_receipt.assert_called_once()
 
     assert response.status_code == 200
     body = response.json()

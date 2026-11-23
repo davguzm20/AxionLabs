@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     pgpassword: str
     pgsslmode: str
     pgchannelbinding: str
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
 
 @lru_cache
@@ -53,6 +54,7 @@ class AISettings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
+    openai_vision_model: str = "gpt-4o-mini"
 
 
 @lru_cache
