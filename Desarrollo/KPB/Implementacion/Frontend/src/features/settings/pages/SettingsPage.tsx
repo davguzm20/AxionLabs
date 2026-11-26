@@ -1,5 +1,5 @@
 import { Bell, ChevronRight, DollarSign, Lock, LogOut, PieChart, User } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { logout } from '../../auth/authService';
@@ -12,6 +12,31 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [userProfile, setUserProfile] = useState<{ name?: string; surname?: string; email?: string }>({});
+
+  useEffect(() => {
+    async function fetchUserProfile() {
+      try {
+        const token = localStorage.getItem('access_token');
+        if (!token) return;
+
+        // Hacemos la petición al backend en Render
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setUserProfile(data.user);
+        }
+      } catch (error) {
+        console.error("Error al cargar el perfil:", error);
+      }
+    }
+    fetchUserProfile();
+  }, []);
   const { enabled: alertSoundsEnabled, setEnabled: setAlertSoundsEnabled } = useAlertPreferences();
   const {
     preferences,
@@ -47,8 +72,12 @@ export function SettingsPage() {
         <section aria-label="Perfil" className="mb-6 flex items-center gap-4 rounded-xl border border-ink-300 bg-white p-5 shadow-sm">
           <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-bg text-ink-500"><User aria-hidden="true" size={26} /></span>
           <div className="min-w-0">
-            <h2 className="truncate font-semibold text-ink-900">David Guzmán</h2>
-            <p className="truncate text-sm leading-6 text-ink-500">david.guzman@axonlabs.com</p>
+            <h2 className="truncate font-semibold text-ink-900">
+              {userProfile.name ? `${userProfile.name} ${userProfile.surname || ''}`.trim() : 'Cargando...'}
+            </h2>
+            <p className="truncate text-sm leading-6 text-ink-500">
+              {userProfile.email || 'Cargando...'}
+            </p>
           </div>
         </section>
 
