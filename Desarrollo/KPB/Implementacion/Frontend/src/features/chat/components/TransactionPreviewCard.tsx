@@ -135,7 +135,9 @@ export function TransactionPreviewCard({
           </div>
         )}
         {imageUrl && (
-          <img src={imageUrl} alt="Vista previa temporal del comprobante" className="mt-3 max-h-48 max-w-full rounded-lg border border-ink-300 object-contain" />
+          <div className="mt-3 w-full overflow-hidden rounded-lg border border-ink-300">
+            <img src={imageUrl} alt="Vista previa temporal del comprobante" className="h-auto max-h-48 w-full object-contain" />
+          </div>
         )}
         {preview.ocr_text && (
           <details className="mt-3 rounded-lg bg-gray-50 p-3">

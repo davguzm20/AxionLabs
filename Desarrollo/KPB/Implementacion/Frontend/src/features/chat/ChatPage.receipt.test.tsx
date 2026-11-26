@@ -133,6 +133,9 @@ describe('CU04 — registro de transacción por foto de comprobante', () => {
     selectImage(makeImage(name, type));
     expect(await screen.findByRole('heading', { name: 'Revisa los datos del comprobante' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Aceptar' })).toBeEnabled());
+    const receiptPreview = screen.getByAltText('Vista previa temporal del comprobante');
+    expect(receiptPreview).toHaveClass('h-auto', 'max-h-48', 'w-full', 'object-contain');
+    expect(receiptPreview.parentElement).toHaveClass('w-full', 'overflow-hidden');
     expect(getOcrText()).toBeInTheDocument();
     expect(screen.getByText('S/ 45.90')).toBeInTheDocument();
     expect(screen.getByText('Supermercado XYZ')).toBeInTheDocument();
