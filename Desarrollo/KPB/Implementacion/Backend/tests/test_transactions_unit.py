@@ -30,6 +30,7 @@ from tests.fakes import (
 )
 
 TEXT_URL = "/api/v1/transactions/text"
+CONFIRMED_URL = "/api/v1/transactions"
 LIMA_TZ = ZoneInfo("America/Lima")
 
 
@@ -114,6 +115,48 @@ def test_expense_registers_and_updates_balance(
     assert transaction.source_type == SourceType.TEXTO
     assert transaction.source_input == "gasté 15 soles en Alimentación"
     assert transaction.amount == Decimal("15.00")
+
+
+def test_confirmed_chat_draft_registers_and_updates_balance(
+    client, users, wallets, categories, saved_transactions
+) -> None:
+    user = create_user(users)
+    wallet = add_wallet(wallets, user)
+    category = add_category(categories, "Alimentación")
+    token = login(client).json()["access_token"]
+
+    response = client.post(
+        CONFIRMED_URL,
+        json={
+            "type": "expense",
+            "amount": "15.00",
+            "currency": "PEN",
+            "concept": "Almuerzo",
+            "occurred_at": "2026-10-27T12:00:00-05:00",
+            "wallet_id": str(wallet.wallet_id),
+            "category_id": str(category.category_id),
+            "source": "text",
+            "category_source": "manual",
+        },
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["transaction"]["type"] == "EXPENSE"
+    assert body["transaction"]["amount"] == "15.00"
+    assert body["transaction"]["transaction_date"] == "2026-10-27"
+    assert body["transaction"]["category"]["id"] == str(category.category_id)
+    assert body["wallet_balance"] == "185.00"
+    assert wallet.current_balance == Decimal("185.00")
+
+    transaction = saved_transactions[0]
+    assert transaction.user_id == user.user_id
+    assert transaction.wallet_id == wallet.wallet_id
+    assert transaction.category_id == category.category_id
+    assert transaction.status == TransactionStatus.CONFIRMADA
+    assert transaction.source_type == SourceType.TEXTO
+    assert transaction.source_input is None
 
 
 @pytest.mark.cp("CP-TXT-02")

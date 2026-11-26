@@ -149,6 +149,7 @@ export function TransactionPreviewCard({
         <p className="mt-3 text-2xl font-bold text-brand-700">{draft.currency === 'PEN' ? 'S/' : '$'} {draft.amount}</p>
         <dl className="mt-3 space-y-2 text-sm text-ink-700">
           <div className="flex justify-between gap-4"><dt className="shrink-0">Concepto</dt><dd className="min-w-0 max-w-[70%] break-words text-right">{draft.concept}</dd></div>
+          {source === 'RECEIPT' && draft.merchant && <div className="flex justify-between gap-4"><dt className="shrink-0">Comercio</dt><dd className="min-w-0 max-w-[70%] break-words text-right">{draft.merchant}</dd></div>}
           <div className="flex justify-between gap-4"><dt className="shrink-0">Categoría</dt><dd className="text-right">{categoriesForSelect.find(({ id }) => id === draft.category_id)?.name ?? previewCategory.name}</dd></div>
           <div className="flex justify-between gap-4"><dt className="shrink-0">Monedero</dt><dd className="text-right">{walletOptions.find(({ id }) => id === draft.wallet_id)?.name ?? 'Monedero'}</dd></div>
           <div className="flex justify-between gap-4"><dt className="shrink-0">Fecha</dt><dd className="text-right">{new Date(`${draft.transaction_date}T12:00:00`).toLocaleDateString('es-PE', { day: 'numeric', month: 'short', year: 'numeric' })}</dd></div>

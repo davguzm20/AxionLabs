@@ -1,6 +1,7 @@
 """Controlador FastAPI (Router) para el módulo de Transacciones (CU02, CU03 y CU04).
 
 Rutas expuestas:
+- POST /api/v1/transactions: Persiste un borrador de transacción ya confirmado.
 - POST /api/v1/transactions/text: Registra una transacción procesando texto libre con IA (CU02).
 - POST /api/v1/transactions/voice: Transcribe una nota de voz y genera vista previa (CU03 - Paso 1).
 - POST /api/v1/transactions/voice/confirm: Guarda la nota de voz revisada (CU03 - Paso 2).
@@ -34,6 +35,7 @@ from app.modules.transactions import repository, service
 from app.modules.transactions.audio_validation import MAX_AUDIO_BYTES
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    ConfirmedTransactionRequest,
     ReceiptConfirmRequest,
     ReceiptPreviewResponse,
     TextPreviewResponse,
@@ -75,6 +77,27 @@ Bus = Annotated[NotificationBus, Depends(get_notification_bus)]
 # =============================================================================
 # Endpoints CU02: Transacción por Texto Libre
 # =============================================================================
+
+@router.post(
+    "",
+    response_model=TextTransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registrar un borrador de transacción confirmado",
+)
+def create_confirmed_transaction(
+    data: ConfirmedTransactionRequest,
+    db: DbSession,
+    current: Current,
+    bus: Annotated[NotificationBus, Depends(get_notification_bus)],
+) -> TextTransactionResponse:
+    """Guarda los campos revisados y confirmados por el usuario en el chat."""
+    return service.create_from_confirmed_draft(
+        db=db,
+        user=current.user,
+        data=data,
+        bus=bus,
+    )
+
 
 @extractions_router.post(
     "/text",

@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
 
+def normalize_cors_origins(origins: str) -> list[str]:
+    """Normaliza una lista CORS separada por comas para Starlette."""
+    normalized: list[str] = []
+    for raw_origin in origins.split(","):
+        origin = raw_origin.strip().rstrip("/")
+        if origin:
+            normalized.append(origin)
+    return normalized
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
@@ -44,17 +53,14 @@ def get_auth_settings() -> AuthSettings:
 
 
 class AISettings(BaseSettings):
-    """Configuración para servicios de Inteligencia Artificial (OpenAI o Mock).
-
-    Si openai_api_key no está presente o es vacía, el sistema usa el extractor
-    simulado (Mock) para desarrollo local y pruebas sin costo.
-    """
+    """Configuración para los servicios de Inteligencia Artificial de OpenAI."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
     openai_vision_model: str = "gpt-4o-mini"
+    openai_vision_timeout_seconds: float = Field(default=30.0, ge=1, le=120)
 
 
 @lru_cache

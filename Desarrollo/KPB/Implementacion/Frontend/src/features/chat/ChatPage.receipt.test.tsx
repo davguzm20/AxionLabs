@@ -15,7 +15,7 @@ import type { SavedTransactionResponse, TransactionPreview } from './transaction
 
 vi.mock('../notifications/components/NotificationBell', () => ({ NotificationBell: () => null }));
 
-const OCR_TEXT = 'SUPERMERCADO XYZ\nRUC 20123456789\nTOTAL S/ 45.90';
+const OCR_TEXT = 'PAGO YAPE\nTOTAL S/ 5.00';
 const imageSettings = { width: 1280, height: 720, error: false };
 const uploaded = vi.fn();
 const confirmed = vi.fn();
@@ -33,12 +33,12 @@ class ReceiptImageMock {
   }
 }
 
-function makeReceiptPreview(amount: string | null = '45.90'): TransactionPreview {
+function makeReceiptPreview(amount: string | null = '5.00'): TransactionPreview {
   return makeTextPreview({
     amount,
-    concept: 'Supermercado XYZ',
-    merchant: 'Supermercado XYZ',
-    ruc: '20123456789',
+    concept: 'Pago por Yape',
+    merchant: 'Yape',
+    ruc: null,
     category: { ...foodCategory },
   }, { preview_id: 'preview-cu04-1', ocr_text: OCR_TEXT });
 }
@@ -137,8 +137,10 @@ describe('CU04 — registro de transacción por foto de comprobante', () => {
     expect(receiptPreview).toHaveClass('h-auto', 'max-h-48', 'w-full', 'object-contain');
     expect(receiptPreview.parentElement).toHaveClass('w-full', 'overflow-hidden');
     expect(getOcrText()).toBeInTheDocument();
-    expect(screen.getByText('S/ 45.90')).toBeInTheDocument();
-    expect(screen.getByText('Supermercado XYZ')).toBeInTheDocument();
+    expect(screen.getByText('S/ 5.00')).toBeInTheDocument();
+    expect(screen.getByText('Comercio')).toBeInTheDocument();
+    expect(screen.getByText('Yape')).toBeInTheDocument();
+    expect(screen.queryByText('Supermercado Metro')).not.toBeInTheDocument();
     expect(uploaded).toHaveBeenCalledExactlyOnceWith({
       image: expect.objectContaining({ name, type, size: expect.any(Number) }),
       keys: ['image'],
@@ -198,8 +200,8 @@ describe('CU04 — registro de transacción por foto de comprobante', () => {
     expect(await screen.findByRole('heading', { name: 'Transacción registrada' })).toBeInTheDocument();
     expect(confirmed).toHaveBeenCalledExactlyOnceWith({
       body: expect.objectContaining({
-        preview_id: 'preview-cu04-1', amount: '52.40', concept: 'Supermercado XYZ',
-        category_id: foodCategory.id, wallet_id: testWallet.id, ocr_text: OCR_TEXT,
+        preview_id: 'preview-cu04-1', amount: '52.40', concept: 'Pago por Yape',
+        category_id: foodCategory.id, wallet_id: testWallet.id, merchant: 'Yape', ocr_text: OCR_TEXT,
       }),
       key: expect.stringMatching(/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i),
       authorization: 'Bearer token-cu04',
@@ -238,7 +240,7 @@ describe('CU04 — registro de transacción por foto de comprobante', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Aceptar' }));
     expect(await screen.findByRole('heading', { name: 'Transacción registrada' })).toBeInTheDocument();
     expect(confirmed).toHaveBeenCalledExactlyOnceWith({
-      body: expect.objectContaining({ preview_id: 'preview-cu04-1', amount: '45.90', ocr_text: OCR_TEXT }),
+      body: expect.objectContaining({ preview_id: 'preview-cu04-1', amount: '5.00', ocr_text: OCR_TEXT }),
       key: expect.any(String),
       authorization: 'Bearer token-cu04',
     });

@@ -12,7 +12,7 @@ import uuid
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from app.modules.alerts.schemas import AlertOut
 
@@ -39,6 +39,22 @@ class TextTransactionRequest(BaseModel):
         default="America/Lima",
         description="Zona horaria para resolver fechas relativas como 'hoy' o 'ayer'.",
     )
+
+
+class ConfirmedTransactionRequest(BaseModel):
+    """Borrador confirmado por el usuario en el chat."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["income", "expense"]
+    amount: str
+    currency: Literal["PEN", "USD"]
+    concept: str = Field(min_length=1, max_length=200)
+    occurred_at: AwareDatetime
+    wallet_id: uuid.UUID
+    category_id: uuid.UUID
+    source: Literal["text"] = "text"
+    category_source: Literal["suggested", "manual"] | None = None
 
 
 class TransactionCorrectionRequest(BaseModel):
@@ -166,7 +182,7 @@ class ReceiptConfirmRequest(BaseModel):
 
     preview_id: uuid.UUID = Field(description="ID de la vista previa temporal obtenido en el Paso 1")
     type: str = Field(default="EXPENSE", description="Tipo de movimiento (EXPENSE o INCOME)")
-    amount: str = Field(description="Monto final verificado o corregido por el usuario (ej: '45.90')")
+    amount: str = Field(description="Monto final verificado o corregido por el usuario (ej: '12.34')")
     currency: str = Field(default="PEN", description="Moneda de la transacción (PEN o USD)")
     concept: str = Field(min_length=1, max_length=200, description="Concepto del gasto")
     merchant: str | None = Field(default=None, description="Nombre del comercio")

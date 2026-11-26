@@ -93,6 +93,19 @@ describe('HistoryPage', () => {
     if (new Date().getDate() > 1) expect(screen.getByText('Ayer')).toBeInTheDocument();
   });
 
+  it('omite Comercio en el detalle aunque la respuesta incluya merchant', async () => {
+    historyMocks.getTransaction.mockImplementation(async (id: string) => ({
+      ...transactions.find((transaction) => transaction.id === id)!,
+      merchant: 'Yamile Zar',
+    }));
+    renderPage();
+
+    await userEvent.setup().click(await screen.findByRole('button', { name: /Cena, gasto de/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Detalle del movimiento' });
+    expect(dialog).not.toHaveTextContent('Comercio');
+    expect(dialog).not.toHaveTextContent('Yamile Zar');
+  });
+
   it('combina el filtro de tipo y permite corregir categoría y concepto', async () => {
     const user = userEvent.setup();
     renderPage();

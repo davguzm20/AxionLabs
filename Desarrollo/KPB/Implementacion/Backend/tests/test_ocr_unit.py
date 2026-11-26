@@ -5,10 +5,11 @@ Cubre la validación de la imagen, el extractor simulado de visión, la vista
 previa temporal y la persistencia de la transacción con ``source_type = OCR``.
 """
 
+import sys
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -93,48 +94,143 @@ def test_validate_accepts_jpeg_by_magic_bytes() -> None:
     assert result.data
 
 
-def test_mock_vision_extracts_receipt_fields(monkeypatch) -> None:
+@pytest.mark.parametrize("api_key", [None, "mock"])
+def test_receipt_endpoint_requires_valid_openai_configuration(
+    api, monkeypatch, api_key
+) -> None:
     monkeypatch.setattr(
         vision,
         "get_ai_settings",
-        lambda: type("Settings", (), {"openai_api_key": None})(),
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "openai_api_key": api_key,
+                "openai_vision_model": "gpt-4o-mini",
+                "openai_vision_timeout_seconds": 30.0,
+            },
+        )(),
     )
 
-    receipt = vision.extract_receipt_from_image(b"foto")
+    response = api.post(URL, files={"image": ("boleta.jpg", JPEG, "image/jpeg")})
 
-    assert receipt.amount == Decimal("45.90")
-    assert receipt.currency == "PEN"
-    assert receipt.merchant == "Supermercado Metro"
-    assert receipt.ruc == "20100055237"
-    assert receipt.confidence >= 0.5
-    assert "TOTAL S/ 45.90" in receipt.ocr_text
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "OCR_UNAVAILABLE"
 
 
-def test_receipt_preview_returns_extracted_data(api) -> None:
-    mocked_receipt = vision.ExtractedReceipt(
-        amount=Decimal("45.90"),
-        currency="PEN",
-        merchant="Supermercado Metro",
-        ruc="20100055237",
-        transaction_date=datetime.now(UTC).date(),
-        concept="Supermercado Metro",
-        ocr_text="TOTAL S/ 45.90",
-        confidence=0.88,
+def test_vision_rejects_an_unreadable_receipt(monkeypatch) -> None:
+    class FakeOpenAI:
+        def __init__(self, **_: object) -> None:
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **__: SimpleNamespace(
+                        choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))]
+                    )
+                )
+            )
+
+    monkeypatch.setitem(
+        sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI)
     )
-    with patch(
-        "app.modules.transactions.service.extract_receipt_from_image",
-        return_value=mocked_receipt,
-    ) as extract_receipt:
-        response = api.post(URL, files={"image": ("boleta.jpg", JPEG, "image/jpeg")})
 
-    extract_receipt.assert_called_once()
+    with pytest.raises(AppError) as exc:
+        vision._extract_with_openai_vision(
+            image_bytes=b"foto",
+            mime_type="image/jpeg",
+            api_key="sk-test",
+            model="gpt-4o-mini",
+            today_str=TODAY.isoformat(),
+            default_currency="PEN",
+        )
+
+    assert (exc.value.status_code, exc.value.code) == (422, "IMAGE_UNREADABLE")
+
+
+def test_receipt_preview_uses_openai_vision_result(api, monkeypatch) -> None:
+    class FakeOpenAI:
+        def __init__(self, **_: object) -> None:
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **__: SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                message=SimpleNamespace(
+                                    content=(
+                                        '{"amount":" S/ 5.00 ","currency":"PEN",'
+                                        '"merchant":"Yape","ruc":null,'
+                                        '"transaction_date":"2026-11-26",'
+                                        '"concept":"Pago por Yape",'
+                                        '"ocr_text":"PAGO YAPE TOTAL S/ 5.00",'
+                                        '"confidence":"not-a-number"}'
+                                    )
+                                )
+                            )
+                        ]
+                    )
+                )
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(
+        vision,
+        "get_ai_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "openai_api_key": "sk-test",
+                "openai_vision_model": "gpt-4o-mini",
+                "openai_vision_timeout_seconds": 30.0,
+            },
+        )(),
+    )
+
+    response = api.post(URL, files={"image": ("boleta.jpg", JPEG, "image/jpeg")})
 
     assert response.status_code == 200
     body = response.json()
-    assert Decimal(body["extracted"]["amount"]) == Decimal("45.90")
-    assert body["extracted"]["merchant"] == "Supermercado Metro"
+    assert Decimal(body["extracted"]["amount"]) == Decimal("5.00")
+    assert body["extracted"]["merchant"] == "Yape"
+    assert body["extracted"]["merchant"] != "Supermercado Metro"
+    assert body["confidence"] == 0.85
     assert body["requires_confirmation"] is True
     assert uuid.UUID(body["preview_id"])
+
+
+def test_receipt_preview_returns_503_for_truncated_openai_json(api, monkeypatch) -> None:
+    class FakeOpenAI:
+        def __init__(self, **_: object) -> None:
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **__: SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                message=SimpleNamespace(content='{"amount":"5.00"')
+                            )
+                        ]
+                    )
+                )
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(
+        vision,
+        "get_ai_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "openai_api_key": "sk-test",
+                "openai_vision_model": "gpt-4o-mini",
+                "openai_vision_timeout_seconds": 30.0,
+            },
+        )(),
+    )
+
+    response = api.post(URL, files={"image": ("boleta.jpg", JPEG, "image/jpeg")})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "OCR_UNAVAILABLE"
 
 
 def test_receipt_preview_rejects_non_image(api) -> None:

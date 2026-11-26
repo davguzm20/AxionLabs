@@ -4,6 +4,9 @@ import types
 import uuid
 from types import SimpleNamespace
 
+import pytest
+
+from app.core.errors import AppError
 from app.integrations.ai import extractor, vision
 from app.integrations.ai.classifier import CategoryClassifier
 from app.integrations.ai.transcription import MOCK_TRANSCRIPT, transcribe
@@ -84,23 +87,26 @@ def test_vision_openai_call_has_hard_cost_limits(monkeypatch) -> None:
     )
 
     assert result.amount is not None
-    assert calls["client"] == {"api_key": "test-key", "timeout": 10.0, "max_retries": 0}
+    assert calls["client"] == {"api_key": "test-key", "timeout": 30.0, "max_retries": 0}
     assert calls["request"] and calls["request"]["temperature"] == 0.0
-    assert calls["request"]["max_tokens"] == 200
+    assert calls["request"]["max_tokens"] == 800
+    image = calls["request"]["messages"][1]["content"][1]
+    assert image["image_url"]["detail"] == "auto"
 
 
-def test_openai_failure_falls_back_without_network(monkeypatch) -> None:
+def test_vision_openai_failure_returns_ocr_unavailable(monkeypatch) -> None:
     _install_fake_openai(monkeypatch, error=RuntimeError("network unavailable"))
 
     text = extractor._extract_with_openai(
         "gasté 15 soles", "test-key", "gpt-4o-mini", "2026-11-14", "PEN"
     )
-    receipt = vision._extract_with_openai_vision(
-        b"image", "image/jpeg", "test-key", "gpt-4o-mini", "2026-11-14", "PEN"
-    )
+    with pytest.raises(AppError) as exc:
+        vision._extract_with_openai_vision(
+            b"image", "image/jpeg", "test-key", "gpt-4o-mini", "2026-11-14", "PEN"
+        )
 
     assert text.amount is not None
-    assert receipt.amount is not None
+    assert (exc.value.status_code, exc.value.code) == (503, "OCR_UNAVAILABLE")
 
 
 def test_transcription_is_always_local_mock() -> None:

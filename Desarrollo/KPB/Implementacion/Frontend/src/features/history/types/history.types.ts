@@ -15,7 +15,6 @@ export interface HistoryTransaction {
   amount: string;
   currency: string;
   concept: string;
-  merchant?: string | null;
   ruc?: string | null;
   transaction_date: string;
   wallet_id: string;

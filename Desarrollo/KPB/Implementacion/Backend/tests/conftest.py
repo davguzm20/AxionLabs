@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 # Se ejecuta antes de importar la aplicacion: las pruebas nunca leen la clave real
 # del .env. El adaptador de vision reconoce "mock" y no abre conexiones externas.
-os.environ["OPENAI_API_KEY"] = "mock"
+os.environ["OPENAI_API_KEY"] = "sk-test-mock-key"
 
 import fakeredis
 import pytest

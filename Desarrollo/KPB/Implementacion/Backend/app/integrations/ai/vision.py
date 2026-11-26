@@ -3,7 +3,7 @@
 Implementa el prompt oficial de KPB-Specs (12-prompts/system-prompts/extract-receipt.md).
 Soporta:
 1. OpenAI Vision (gpt-4o-mini) enviando la imagen en memoria como base64 data URL.
-2. Extractor simulado (Mock) si no hay clave de OpenAI, para pruebas locales sin costo.
+2. Errores explícitos cuando el servicio no está disponible o no puede leer la imagen.
 """
 
 from __future__ import annotations
@@ -11,12 +11,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from app.config import get_ai_settings
+from app.core.errors import AppError
 
 logger = logging.getLogger(__name__)
 LIMA_TZ = ZoneInfo("America/Lima")
@@ -44,7 +46,7 @@ Recibes una imagen JPG o PNG. Extrae solo lo que sea legible.
 Reglas:
 - No inventes datos. Si no puedes leer un campo, usa null.
 - El monto total debe ser el total pagado, no el subtotal ni el IGV.
-- Devuelve el monto como string decimal con dos decimales, sin símbolo de moneda: "45.90".
+- Devuelve el monto como string decimal con dos decimales, sin símbolo de moneda: "12.34".
 - Moneda: PEN si dice S/, soles o /; USD si dice $ o dólares. Si no se distingue, null.
 - Fecha: YYYY-MM-DD. Si no se lee, null.
 - RUC: 11 dígitos, sin guiones. Si no se lee, null.
@@ -75,18 +77,21 @@ def _extract_with_openai_vision(
     model: str,
     today_str: str,
     default_currency: str,
+    timeout_seconds: float = 30.0,
 ) -> ExtractedReceipt:
     """Invoca el modelo multimodal de OpenAI enviando la imagen en base64 en memoria."""
     try:
         from openai import OpenAI
     except ImportError:
-        logger.warning(
-            "Librería 'openai' no instalada. Usando extractor simulado como respaldo."
+        logger.exception("La librería 'openai' no está instalada.")
+        raise AppError(
+            503,
+            "OCR_UNAVAILABLE",
+            "El servicio de lectura de comprobantes no está disponible. Intenta nuevamente en unos minutos.",
         )
-        return _extract_with_mock(today_str, default_currency)
 
     try:
-        client = OpenAI(api_key=api_key, timeout=10.0, max_retries=0)
+        client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
 
         # Codificar imagen en memoria a base64
         base64_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -108,25 +113,35 @@ def _extract_with_openai_vision(
                         {"type": "text", "text": user_prompt},
                         {
                             "type": "image_url",
-                            "image_url": {"url": data_url, "detail": "low"},
+                            "image_url": {"url": data_url, "detail": "auto"},
                         },
                     ],
                 },
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
-            max_tokens=200,
+            max_tokens=800,
         )
 
         content = response.choices[0].message.content or "{}"
         data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("La respuesta de OpenAI Vision no es un objeto JSON.")
 
         # Parsear monto decimal
         raw_amount = data.get("amount")
         amount = None
         if raw_amount:
             try:
-                amount = Decimal(str(raw_amount).replace(",", "."))
+                cleaned_amount = re.sub(r"[^0-9,.-]", "", str(raw_amount).strip())
+                if "," in cleaned_amount and "." in cleaned_amount:
+                    if cleaned_amount.rfind(",") > cleaned_amount.rfind("."):
+                        cleaned_amount = cleaned_amount.replace(".", "").replace(",", ".")
+                    else:
+                        cleaned_amount = cleaned_amount.replace(",", "")
+                else:
+                    cleaned_amount = cleaned_amount.replace(",", ".")
+                amount = Decimal(cleaned_amount)
             except InvalidOperation:
                 amount = None
 
@@ -144,36 +159,48 @@ def _extract_with_openai_vision(
         if ruc and (len(str(ruc)) != 11 or not str(ruc).isdigit()):
             ruc = None
 
-        return ExtractedReceipt(
+        try:
+            confidence = float(data.get("confidence", 0.85))
+        except (TypeError, ValueError):
+            confidence = 0.85
+
+        receipt = ExtractedReceipt(
             amount=amount,
             currency=data.get("currency") or default_currency,
             merchant=data.get("merchant"),
             ruc=ruc,
             transaction_date=tx_date,
-            concept=data.get("concept") or data.get("merchant") or "Consumo de comprobante",
+            concept=data.get("concept") or data.get("merchant"),
             ocr_text=data.get("ocr_text"),
-            confidence=float(data.get("confidence", 0.85)),
+            confidence=confidence,
         )
+        if not any(
+            (
+                receipt.amount is not None,
+                receipt.merchant,
+                receipt.ruc,
+                receipt.transaction_date,
+                receipt.concept,
+                receipt.ocr_text,
+            )
+        ):
+            raise AppError(
+                422,
+                "IMAGE_UNREADABLE",
+                "No se pudo leer información del comprobante. Toma otra foto con mejor iluminación y enfoque.",
+            )
 
-    except Exception:
-        # Red, timeout o JSON inválido: no reintentamos ni bloqueamos el flujo.
-        logger.warning("OpenAI no disponible para OCR; se usa el mock local.")
-        return _extract_with_mock(today_str, default_currency)
+        return receipt
 
-
-def _extract_with_mock(today_str: str, default_currency: str) -> ExtractedReceipt:
-    """Extractor simulado para pruebas locales sin costo ni consumo de API."""
-    today = date.fromisoformat(today_str)
-    return ExtractedReceipt(
-        amount=Decimal("45.90"),
-        currency=default_currency,
-        merchant="Supermercado Metro",
-        ruc="20100055237",
-        transaction_date=today,
-        concept="Supermercado Metro",
-        ocr_text="CENCOSUD RETAIL PERU S.A.\nRUC: 20100055237\nBOLETA DE VENTA ELECTRONICA\nTOTAL S/ 45.90\nCANCELADO",
-        confidence=0.88,
-    )
+    except AppError:
+        raise
+    except Exception as e:
+        logger.exception("Error al invocar OpenAI Vision: %s", type(e).__name__)
+        raise AppError(
+            503,
+            "OCR_UNAVAILABLE",
+            "El servicio de lectura de comprobantes no está disponible. Intenta nuevamente en unos minutos.",
+        ) from e
 
 
 def extract_receipt_from_image(
@@ -181,23 +208,28 @@ def extract_receipt_from_image(
     mime_type: str = "image/jpeg",
     default_currency: str = "PEN",
 ) -> ExtractedReceipt:
-    """Extrae los datos de la boleta/factura en memoria usando OpenAI Vision o Mock."""
+    """Extrae los datos de una boleta/factura mediante OpenAI Vision."""
     settings = get_ai_settings()
     today_str = datetime.now(LIMA_TZ).date().isoformat()
 
     if (
-        settings.openai_api_key
-        and settings.openai_api_key.strip() != ""
-        and settings.openai_api_key.lower() != "mock"
+        not settings.openai_api_key
+        or not settings.openai_api_key.strip()
+        or settings.openai_api_key.strip().lower() == "mock"
     ):
-        return _extract_with_openai_vision(
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            api_key=settings.openai_api_key,
-            model=settings.openai_vision_model,
-            today_str=today_str,
-            default_currency=default_currency,
+        raise AppError(
+            503,
+            "OCR_UNAVAILABLE",
+            "El servicio de lectura de comprobantes no está configurado. Intenta nuevamente más tarde.",
         )
 
-    return _extract_with_mock(today_str, default_currency)
+    return _extract_with_openai_vision(
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        api_key=settings.openai_api_key,
+        model=settings.openai_vision_model,
+        today_str=today_str,
+        default_currency=default_currency,
+        timeout_seconds=settings.openai_vision_timeout_seconds,
+    )
 

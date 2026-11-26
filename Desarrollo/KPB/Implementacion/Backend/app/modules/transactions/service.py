@@ -51,6 +51,7 @@ from app.modules.transactions.audio_validation import (
 from app.modules.transactions.image_validation import validate_and_prepare_image
 from app.modules.transactions.schemas import (
     CategoryInfo,
+    ConfirmedTransactionRequest,
     CurrencySummary,
     ExtractedReceiptData,
     PaginationMeta,
@@ -201,6 +202,79 @@ def persist_confirmed(
     if bus is not None:
         alerts_service.publish_alerts(bus, user.user_id, alerts)
     return alerts
+
+
+def create_from_confirmed_draft(
+    db: Session,
+    user: User,
+    data: ConfirmedTransactionRequest,
+    bus: NotificationBus | None = None,
+) -> TextTransactionResponse:
+    """Persiste los campos del borrador que el usuario confirmó en el chat."""
+    amount = _parse_confirmed_amount(data.amount)
+    concept = data.concept.strip()
+    if not concept:
+        raise AppError(422, "VALIDATION_ERROR", "El concepto no puede estar vacío.")
+
+    wallet = repository.get_wallet(db, user.user_id, data.wallet_id, for_update=True)
+    if wallet is None:
+        raise AppError(
+            409, "NO_ACTIVE_WALLET", "El monedero seleccionado no existe o está inactivo."
+        )
+    if data.currency != wallet.currency.value:
+        name = "soles" if wallet.currency == Currency.PEN else "dólares"
+        raise AppError(
+            422,
+            "CURRENCY_MISMATCH",
+            f"El monedero es en {name}. Elige otro monedero o registra el monto en {name}.",
+        )
+
+    transacted_at = data.occurred_at.astimezone(LIMA_TZ)
+    tx_date = transacted_at.date()
+    _validate_transaction_date(tx_date)
+
+    category = repository.get_category_by_id(db, user.user_id, data.category_id)
+    if category is None:
+        raise AppError(422, "INVALID_CATEGORY", "Selecciona una categoría válida.")
+
+    is_income = data.type == "income"
+    transaction = Transaction(
+        user_id=user.user_id,
+        wallet_id=wallet.wallet_id,
+        category_id=category.category_id,
+        amount=amount,
+        type=TransactionType.INGRESO if is_income else TransactionType.GASTO,
+        currency=wallet.currency,
+        concept=concept,
+        transacted_at=transacted_at,
+        status=TransactionStatus.CONFIRMADA,
+        source_input=None,
+        source_type=SourceType.TEXTO,
+    )
+    alerts = persist_confirmed(
+        db, user, transaction, wallet, amount if is_income else -amount, bus
+    )
+
+    transaction_type = "INCOME" if is_income else "EXPENSE"
+    symbol = _get_currency_symbol(wallet.currency)
+    return TextTransactionResponse(
+        transaction=TransactionOut(
+            id=transaction.transaction_id,
+            type=transaction_type,
+            amount=f"{transaction.amount:.2f}",
+            currency=wallet.currency.value,
+            concept=transaction.concept,
+            transaction_date=tx_date.isoformat(),
+            wallet_id=wallet.wallet_id,
+            category=CategoryInfo(id=category.category_id, name=category.name, icon="tag"),
+            source="TEXT",
+            needs_review=False,
+            created_at=(transaction.created_at or transacted_at).isoformat(),
+        ),
+        wallet_balance=f"{wallet.current_balance:.2f}",
+        alerts=alerts,
+        message=f"Listo, registré {symbol} {transaction.amount:.2f} en {category.name}.",
+    )
 
 
 def create_from_text(
@@ -431,7 +505,7 @@ def create_receipt_preview(
 
     default_curr = "PEN" if wallet.currency == Currency.PEN else "USD"
 
-    # 3. Invocar IA de visión (OpenAI Vision o Mock)
+    # 3. Invocar IA de visión
     extracted = extract_receipt_from_image(
         image_bytes=validated.data,
         mime_type=validated.mime_type,
@@ -447,7 +521,7 @@ def create_receipt_preview(
     ):
         raise AppError(
             422,
-            "IMAGE_UNCLEAR",
+            "IMAGE_UNREADABLE",
             "La imagen no es suficientemente clara o no parece un comprobante. Toma otra foto con mejor iluminación.",
         )
 

@@ -7,6 +7,7 @@ import { clearLocalSession } from '../../auth/session';
 import { useAlertPreferences } from '../../../hooks/useAlertPreferences';
 import { NotificationBell } from '../../cu08/components/NotificationBell';
 import { useNotificationPreferences } from '../../notifications/hooks/useNotificationPreferences';
+import { API_BASE_URL } from '../../../lib/api';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -21,7 +22,7 @@ export function SettingsPage() {
         if (!token) return;
 
         // Hacemos la petición al backend en Render
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
+        const response = await fetch(`${API_BASE_URL}/auth/me`, {
           headers: {
             'Authorization': `Bearer ${token}`
           }

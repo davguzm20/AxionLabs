@@ -24,6 +24,25 @@ beforeEach(() => {
 });
 
 describe('CU02 — tarjeta de vista previa por texto', () => {
+  it('muestra Comercio en el preview OCR', async () => {
+    const preview = makeTextPreview({ concept: 'Compra', merchant: 'Yamile Zar' });
+    renderPreview({ source: 'RECEIPT', preview });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Aceptar' })).toBeEnabled());
+
+    const card = screen.getByRole('region', { name: 'Revisa los datos del comprobante' });
+    expect(within(card).getByText('Comercio')).toBeInTheDocument();
+    expect(within(card).getByText('Yamile Zar')).toBeInTheDocument();
+  });
+
+  it.each(['TEXT', 'VOICE'] as const)('oculta Comercio en el preview %s', async (source) => {
+    const preview = makeTextPreview({ concept: 'Compra', merchant: 'Yamile Zar' });
+    renderPreview({ source, preview });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Aceptar' })).toBeEnabled());
+
+    expect(screen.queryByText('Comercio')).not.toBeInTheDocument();
+    expect(screen.queryByText('Yamile Zar')).not.toBeInTheDocument();
+  });
+
   it.each(['array', 'data'])('C02-PREV-01: presenta los datos y acepta catálogos con formato %s', async (format) => {
     const categoryRequests = vi.fn();
     const walletRequests = vi.fn();

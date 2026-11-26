@@ -1306,14 +1306,14 @@ export const handlers = [
     }
     return HttpResponse.json({
       preview_id: 'receipt-preview-20261031-001',
-      ocr_text: 'SUPERMERCADO XYZ\nRUC 20123456789\nTOTAL S/ 45.90',
+      ocr_text: 'PAGO YAPE\nTOTAL S/ 5.00',
       extracted: {
         type: 'EXPENSE',
-        amount: '45.90',
+        amount: '5.00',
         currency: 'PEN',
-        concept: 'Supermercado XYZ',
-        merchant: 'Supermercado XYZ',
-        ruc: '20123456789',
+        concept: 'Pago por Yape',
+        merchant: 'Yape',
+        ruc: null,
         transaction_date: today(),
         wallet_id: '4d6b3036-4290-4bde-aea4-375c779ef48b',
         category: { id: 'f61d5fcc-730a-48d9-81dc-1db75ce4af16', name: 'Alimentación', icon: 'utensils', type: 'EXPENSE' },

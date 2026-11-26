@@ -235,7 +235,6 @@ function HistoryDetailPanel({ transactionId, walletNames, categories, onClose, o
               <dt className="text-ink-500">Tipo</dt><dd>{transaction.type === 'INCOME' ? 'Ingreso' : 'Gasto'}</dd>
               <dt className="text-ink-500">Monedero</dt><dd>{walletNames.get(transaction.wallet_id) ?? 'Monedero'}</dd>
               <dt className="text-ink-500">Origen</dt><dd>{({ TEXT: 'Texto', MANUAL: 'Manual', VOICE: 'Voz', RECEIPT: 'Comprobante' } as const)[transaction.source]}</dd>
-              {transaction.merchant && <><dt className="text-ink-500">Comercio</dt><dd>{transaction.merchant}</dd></>}
               {transaction.category_confidence != null && <><dt className="text-ink-500">Confianza de categoría</dt><dd>{Math.round(transaction.category_confidence * 100)}%</dd></>}
             </dl>
 

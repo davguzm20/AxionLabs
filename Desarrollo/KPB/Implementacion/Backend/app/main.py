@@ -1,8 +1,11 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.config import get_settings
+from app.config import get_settings, normalize_cors_origins
 from app.core.errors import register_error_handlers
 from app.modules.alerts.router import router as thresholds_router
 from app.modules.auth.router import preferences_router, router as auth_router
@@ -11,6 +14,15 @@ from app.modules.categories.router import router as categories_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.transactions.router import extractions_router, router as transactions_router
 from app.modules.wallets.router import router as wallets_router
+
+logger = logging.getLogger(__name__)
+API_VERSION = "0.1.1"
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    logger.info("Starting KhipuBot API version=%s vision=openai", API_VERSION)
+    yield
 
 # Metadatos OpenAPI para documentación interactiva en Swagger (/docs) y ReDoc (/redoc)
 API_DESCRIPTION = """
@@ -64,9 +76,10 @@ OPENAPI_TAGS = [
 
 app = FastAPI(
     title="KhipuBot API",
-    version="0.1.0",
+    version=API_VERSION,
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
+    lifespan=lifespan,
     contact={
         "name": "AxionLabs — Proyecto KhipuBot",
     },
@@ -75,11 +88,7 @@ app.openapi_version = "3.0.3"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        origin.strip()
-        for origin in get_settings().cors_origins.split(",")
-        if origin.strip()
-    ],
+    allow_origins=normalize_cors_origins(get_settings().cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -108,4 +117,9 @@ def root() -> RedirectResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     """Health check del servicio. No consulta la base de datos."""
-    return {"status": "ok", "service": "kpb-backend"}
+    return {
+        "status": "ok",
+        "service": "kpb-backend",
+        "vision": "openai",
+        "version": API_VERSION,
+    }
