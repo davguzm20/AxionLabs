@@ -59,7 +59,10 @@ describe('CU07 — listado y gestión de presupuestos con MSW', () => {
 
     const activeList = await screen.findByRole('region', { name: 'Lista de presupuestos' });
     expect(within(activeList).getByRole('article', { name: 'Salud' })).toBeInTheDocument();
-    expect(within(activeList).getByRole('article', { name: 'Otros' })).toHaveTextContent('Sin tope configurado');
+    const otherCategory = within(activeList).getByRole('article', { name: 'Otros' });
+    expect(otherCategory).toHaveTextContent('Sin tope configurado');
+    expect(otherCategory).toHaveTextContent('Gastado este mes');
+    expect(otherCategory).toHaveTextContent('Sin gastos registrados');
     expect(within(activeList).queryByRole('heading', { name: 'Sueldo' })).not.toBeInTheDocument();
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inactivos' }));

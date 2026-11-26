@@ -45,7 +45,10 @@ export interface BudgetWithoutCap {
   period_end: null;
   consumed: null;
   remaining: null;
-  percentage: number;
+  monthly_consumed_by_currency: Array<{
+    currency: Currency;
+    amount: string;
+  }>;
   status: 'NONE';
   thresholds: BudgetThreshold[];
 }

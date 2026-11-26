@@ -42,16 +42,6 @@ function getPeriodName(budget: Budget): string {
   return `Cada ${budget.period_days ?? 0} días`;
 }
 
-function getRestartLabel(periodEnd: string): string {
-  const [year = 1970, month = 1, day = 1] = periodEnd.split('-').map(Number);
-  const nextPeriod = new Date(year, month - 1, day + 1, 12);
-  const date = new Intl.DateTimeFormat('es-PE', {
-    day: 'numeric',
-    month: 'long',
-  }).format(nextPeriod);
-
-  return `Se reinicia el ${date}`;
-}
 
 function getProgressState(percentage: number): { label: string; color: string } {
   if (percentage > 100) return { label: 'Te pasaste', color: 'bg-danger-600' };
@@ -83,8 +73,20 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, onSetLi
             Establecer tope
           </button>
         </div>
-        <p className="mt-4 text-sm font-medium text-ink-500">0.0% · Sin tope</p>
-        <div className="mt-2 h-2 rounded-full bg-ink-300/50" aria-label={`Sin tope para ${budget.category.name}`} />
+        <div className="mt-4">
+          <p className="text-sm font-medium text-ink-700">Gastado este mes</p>
+          {budget.monthly_consumed_by_currency.length > 0 ? (
+            <ul className="mt-1 space-y-1">
+              {budget.monthly_consumed_by_currency.map(({ currency, amount }) => (
+                <li key={currency} className="text-sm text-ink-700">
+                  {formatMoney(amount, currency)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-sm text-ink-500">Sin gastos registrados</p>
+          )}
+        </div>
       </article>
     );
   }
@@ -170,7 +172,6 @@ export function BudgetCard({ budget, onEdit, onDeactivate, onReactivate, onSetLi
           ? `Te pasaste por ${formatMoney(remainingAmount, budget.currency)}`
           : `Disponible: ${formatMoney(budget.remaining, budget.currency)}`}
       </p>
-      <p className="mt-1 text-xs text-ink-500">{getRestartLabel(budget.period_end)}</p>
 
       {triggeredThresholds.length > 0 && (
         <p className="mt-2 text-xs font-medium text-warning-600">

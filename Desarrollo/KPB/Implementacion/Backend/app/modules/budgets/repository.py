@@ -69,6 +69,40 @@ def consumed_in_period(db: Session, budget: Budget, start: date, end: date) -> D
     return quantize_money(db.execute(stmt).scalar_one())
 
 
+def consumed_by_category_and_currency_in_period(
+    db: Session,
+    user_id: uuid.UUID,
+    category_ids: list[uuid.UUID],
+    start: date,
+    end: date,
+) -> dict[uuid.UUID, dict[Currency, Decimal]]:
+    if not category_ids:
+        return {}
+
+    stmt = (
+        select(
+            Transaction.category_id,
+            Transaction.currency,
+            func.sum(Transaction.amount),
+        )
+        .where(
+            Transaction.user_id == user_id,
+            Transaction.category_id.in_(category_ids),
+            Transaction.type == TransactionType.GASTO,
+            Transaction.status == TransactionStatus.CONFIRMADA,
+            Transaction.transacted_at >= datetime.combine(start, time.min, LIMA_TZ),
+            Transaction.transacted_at
+            < datetime.combine(end + timedelta(days=1), time.min, LIMA_TZ),
+        )
+        .group_by(Transaction.category_id, Transaction.currency)
+        .order_by(Transaction.category_id, Transaction.currency)
+    )
+    totals: dict[uuid.UUID, dict[Currency, Decimal]] = {}
+    for category_id, currency, amount in db.execute(stmt):
+        totals.setdefault(category_id, {})[currency] = quantize_money(amount)
+    return totals
+
+
 def list_budgets(
     db: Session,
     user_id: uuid.UUID,

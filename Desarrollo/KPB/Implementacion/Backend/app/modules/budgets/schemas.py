@@ -10,7 +10,7 @@ import uuid
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.modules.alerts.schemas import ThresholdOut
 
@@ -60,13 +60,18 @@ class BudgetOut(BaseModel):
     thresholds: list[ThresholdOut]
 
 
+class MonthlyCurrencyConsumption(BaseModel):
+    currency: Literal["PEN", "USD"]
+    amount: str
+
+
 class BudgetWithoutCapOut(BaseModel):
     """Categoría disponible que todavía no tiene un presupuesto activo.
 
     ``GET /budgets`` es un catálogo de categorías de gasto con su presupuesto
-    vigente, no únicamente una lista de filas de ``budgets``.  Al no existir un
-    tope tampoco hay moneda ni periodo con los que calcular un consumo
-    comparable, por eso esos campos son nulos y el avance es 0 %.
+    vigente, no únicamente una lista de filas de ``budgets``. Sin un tope no hay
+    una moneda única ni un porcentaje comparable; el gasto del mes se devuelve
+    separado por moneda.
     """
 
     id: None = None
@@ -80,9 +85,11 @@ class BudgetWithoutCapOut(BaseModel):
     period_end: None = None
     consumed: None = None
     remaining: None = None
-    percentage: float = 0.0
+    monthly_consumed_by_currency: list[MonthlyCurrencyConsumption] = Field(
+        default_factory=list
+    )
     status: Literal["NONE"] = "NONE"
-    thresholds: list[ThresholdOut] = []
+    thresholds: list[ThresholdOut] = Field(default_factory=list)
 
 
 class BudgetList(BaseModel):

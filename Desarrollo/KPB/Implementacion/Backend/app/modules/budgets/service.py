@@ -7,6 +7,7 @@ en CUSTOM, como define 04-api/endpoints/budgets.md.
 
 from __future__ import annotations
 
+import calendar
 import uuid
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -19,6 +20,7 @@ from app.entities import (
     Budget,
     BudgetStatus,
     BudgetThreshold,
+    Category,
     Currency,
     PeriodType,
     User,
@@ -37,6 +39,7 @@ from app.modules.budgets.schemas import (
     BudgetOut,
     BudgetUpdate,
     BudgetWithoutCapOut,
+    MonthlyCurrencyConsumption,
 )
 from app.modules.categories import repository as categories_repository
 
@@ -147,14 +150,22 @@ def _detail(db: Session, budget: Budget) -> BudgetOut:
     return _to_out(db, budget, alerts_service.active_thresholds_out(db, budget), today_lima())
 
 
-def _without_cap(category) -> BudgetWithoutCapOut:
+def _without_cap(
+    category: Category, monthly_consumption: dict[Currency, Decimal]
+) -> BudgetWithoutCapOut:
     """Representación de una categoría que no tiene presupuesto vigente."""
     return BudgetWithoutCapOut(
         category=BudgetCategory(
             id=category.category_id,
             name=category.name,
             icon=CATEGORY_ICON,
-        )
+        ),
+        monthly_consumed_by_currency=[
+            MonthlyCurrencyConsumption(currency=currency.value, amount=f"{amount:.2f}")
+            for currency, amount in sorted(
+                monthly_consumption.items(), key=lambda item: item[0].value
+            )
+        ],
     )
 
 
@@ -164,7 +175,7 @@ def _without_cap(category) -> BudgetWithoutCapOut:
 def list_budgets(
     db: Session, user: User, status: str | None, category_id: uuid.UUID | None
 ) -> list[BudgetOut | BudgetWithoutCapOut]:
-    """Umbrales y alertas se leen en bloque; el consumo, uno por presupuesto (CP-PRE-20)."""
+    """Calcula cada tope y agrupa por moneda el gasto mensual sin tope."""
     db_status = next((k for k, v in API_STATUS.items() if v == status), None)
     # También cubre cuentas creadas antes de que el alta sembrara su catálogo.
     # Es el mismo mecanismo de compatibilidad que usa GET /categories.
@@ -205,8 +216,32 @@ def list_budgets(
     ]
     if db_status != BudgetStatus.INACTIVO:
         rendered = {budget.budget_id: item for budget, item in zip(budgets, result)}
+        no_cap_categories = [
+            category for category, budget in category_budgets if budget is None
+        ]
+        monthly_consumption: dict[uuid.UUID, dict[Currency, Decimal]] = {}
+        if no_cap_categories:
+            month_start = date(today.year, today.month, 1)
+            month_end = date(
+                today.year,
+                today.month,
+                calendar.monthrange(today.year, today.month)[1],
+            )
+            monthly_consumption = (
+                repository.consumed_by_category_and_currency_in_period(
+                    db,
+                    user.user_id,
+                    [category.category_id for category in no_cap_categories],
+                    month_start,
+                    month_end,
+                )
+            )
         return [
-            _without_cap(category) if budget is None else rendered[budget.budget_id]
+            _without_cap(
+                category, monthly_consumption.get(category.category_id, {})
+            )
+            if budget is None
+            else rendered[budget.budget_id]
             for category, budget in category_budgets
         ]
     return result

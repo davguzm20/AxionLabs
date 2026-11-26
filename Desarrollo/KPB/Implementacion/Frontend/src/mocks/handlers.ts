@@ -297,6 +297,27 @@ function spentInMonth(categoryId: string, date: string): string {
   return centsToMoney(total);
 }
 
+function monthlyConsumedByCurrency(categoryId: string): Array<{ currency: Currency; amount: string }> {
+  const month = budgetToday().slice(0, 7);
+  const totals = new Map<Currency, bigint>();
+
+  for (const transaction of savedTransactions.values()) {
+    if (transaction.type !== 'EXPENSE'
+      || transaction.category.id !== categoryId
+      || !transaction.transaction_date.startsWith(month)
+      || (transaction.currency !== 'PEN' && transaction.currency !== 'USD')) {
+      continue;
+    }
+
+    const currency = transaction.currency;
+    totals.set(currency, (totals.get(currency) ?? 0n) + amountToCents(transaction.amount));
+  }
+
+  return [...totals.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, cents]) => ({ currency, amount: centsToMoney(cents) }));
+}
+
 function updateWalletBalance(wallet: Wallet, type: TransactionType, amount: string) {
   const transactionCents = amountToCents(amount);
   const signedCents = type === 'INCOME' ? transactionCents : -transactionCents;
@@ -705,7 +726,9 @@ export const handlers = [
       && category.status !== 'INACTIVE' && (!categoryId || category.id === categoryId)
       && !hasActiveBudgetForCategory(category.id)).map((category) => ({
         id: null, category, currency: null, amount: null, period_type: null, start_date: null, period_days: null,
-        period_start: null, period_end: null, consumed: null, remaining: null, percentage: 0, status: 'NONE', thresholds: [],
+        period_start: null, period_end: null, consumed: null, remaining: null,
+        monthly_consumed_by_currency: monthlyConsumedByCurrency(category.id),
+        status: 'NONE', thresholds: [],
       })) : [];
     return HttpResponse.json({ data: [...data, ...withoutCap] });
   }),
