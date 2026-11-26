@@ -8,7 +8,7 @@ type VoiceRecorderProps = {
 
 const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIO_SECONDS = 60;
-const SUPPORTED_AUDIO_TYPES = new Set(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/wav']);
+const SUPPORTED_AUDIO_TYPES = new Set(['audio/webm', 'audio/ogg', 'audio/mp4', 'video/mp4', 'audio/mpeg', 'audio/wav']);
 const RECORDER_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', 'audio/mp4'];
 
 async function getDuration(file: File): Promise<number> {
@@ -199,7 +199,7 @@ export function VoiceRecorder({ onClose, onSubmit }: VoiceRecorderProps) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="audio/webm,audio/ogg,audio/mp4,audio/mpeg,audio/wav"
+            accept="audio/webm,audio/ogg,audio/mp4,video/mp4,audio/mpeg,audio/wav"
             className="sr-only"
             aria-label="Seleccionar archivo de audio"
             onChange={(event) => {

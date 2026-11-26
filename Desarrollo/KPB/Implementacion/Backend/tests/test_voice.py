@@ -14,6 +14,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 
 import fakeredis
 import pytest
@@ -31,8 +32,7 @@ from app.entities import (
     TransactionType,
     Wallet,
 )
-from app.integrations.ai import extractor
-from app.integrations.ai.transcription import Transcription
+from app.integrations.ai import extractor, transcription
 from app.integrations.redis.notifications import get_notification_bus
 from app.integrations.redis.previews import (
     RECEIPT_PREFIX,
@@ -104,13 +104,19 @@ def store(redis_client):
 
 @pytest.fixture
 def heard(monkeypatch):
-    """Fija lo que "escucha" el transcriptor simulado."""
+    """Simula la respuesta de Whisper sin llamar a la API."""
     result = {"text": "Gasté 15 soles en el menú", "duration": None}
-
-    def fake_transcribe(audio, mime_type, language="es-PE"):
-        return Transcription(text=result["text"], duration_seconds=result["duration"])
-
-    monkeypatch.setattr(service, "transcribe", fake_transcribe)
+    openai_client = Mock()
+    openai_client.audio.transcriptions.create.side_effect = lambda **_: Mock(
+        text=result["text"],
+        duration=result["duration"],
+    )
+    monkeypatch.setattr(
+        transcription,
+        "get_ai_settings",
+        lambda: Mock(openai_api_key="test-key", openai_stt_model="whisper-1"),
+    )
+    monkeypatch.setattr("openai.OpenAI", Mock(return_value=openai_client))
     return result
 
 
@@ -243,6 +249,18 @@ def test_preview_transcribes_without_saving(db, scenario, api, redis_client) -> 
     assert extracted["category"]["name"] == food.name
     assert 0 <= body["confidence"] <= 1
     assert db.execute(select(Transaction)).scalars().all() == []
+
+
+def test_voice_endpoint_accepts_mp4_with_video_mime(api) -> None:
+    mp4_audio = b"\x00\x00\x00\x20ftypM4A " + b"\x00" * 20
+    response = api.post(
+        VOICE_URL,
+        files={"audio": ("nota.mp4", mp4_audio, "video/mp4")},
+        data={"language": "es-PE"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["transcript"] == "Gasté 15 soles en el menú"
 
 
 @pytest.mark.cp("CP-VOZ-08")

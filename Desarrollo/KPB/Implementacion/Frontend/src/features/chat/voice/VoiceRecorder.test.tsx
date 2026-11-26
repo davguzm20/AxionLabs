@@ -175,11 +175,19 @@ describe('CU03 — grabación y selección de audio', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it.each(['webm', 'ogg', 'mp4', 'mpeg', 'wav'])('C03-REC-12: acepta un archivo audio/%s sin pedir micrófono', async (extension) => {
+  it.each([
+    ['webm', 'audio/webm'],
+    ['ogg', 'audio/ogg'],
+    ['mp4', 'audio/mp4'],
+    ['mp4', 'video/mp4'],
+    ['mpeg', 'audio/mpeg'],
+    ['wav', 'audio/wav'],
+  ])('C03-REC-12: acepta un archivo .%s con MIME %s sin pedir micrófono', async (extension, mimeType) => {
     renderRecorder();
-    const file = new File(['audio'], `nota.${extension}`, { type: `audio/${extension}` });
+    const file = new File(['audio'], `nota.${extension}`, { type: mimeType });
     await selectFile(file);
     expect(screen.getByText(`Audio listo: ${file.name}`)).toBeInTheDocument();
+    expect(screen.getByLabelText('Seleccionar archivo de audio')).toHaveAttribute('accept', expect.stringContaining('video/mp4'));
     expect(screen.getByRole('status')).toHaveTextContent('00:12 / 01:00');
     expect(browser.getUserMedia).not.toHaveBeenCalled();
     expect(URL.createObjectURL).toHaveBeenCalledWith(file);

@@ -60,6 +60,7 @@ class AISettings(BaseSettings):
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
     openai_vision_model: str = "gpt-4o-mini"
+    openai_stt_model: str = "whisper-1"
     openai_vision_timeout_seconds: float = Field(default=30.0, ge=1, le=120)
 
 
